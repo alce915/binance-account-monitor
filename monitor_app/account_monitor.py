@@ -1,0 +1,563 @@
+from __future__ import annotations
+
+import asyncio
+from datetime import UTC, datetime
+from decimal import Decimal
+from time import perf_counter
+from typing import Any, Callable, Protocol
+
+from monitor_app.binance import BinanceMonitorGateway, RefreshMarkPriceProvider
+from monitor_app.config import MonitorAccountConfig, Settings
+from monitor_app.history_store import MonitorHistoryStore
+
+
+class UnifiedAccountGateway(Protocol):
+    async def get_unified_account_snapshot(
+        self,
+        *,
+        history_window_days: int = 7,
+        income_limit: int = 100,
+        interest_limit: int = 100,
+        previous_snapshot: dict[str, Any] | None = None,
+        mark_price_provider: RefreshMarkPriceProvider | None = None,
+    ) -> dict[str, Any]: ...
+
+    async def close(self) -> None: ...
+
+
+class RefreshTimeoutError(RuntimeError):
+    def __init__(self, duration_ms: int) -> None:
+        super().__init__("Refresh timed out, previous data preserved")
+        self.duration_ms = duration_ms
+
+
+class AccountMonitorController:
+    def __init__(
+        self,
+        settings: Settings,
+        gateway_factory: Callable[[MonitorAccountConfig], UnifiedAccountGateway] | None = None,
+    ) -> None:
+        self._settings = settings
+        self._history_store = MonitorHistoryStore(settings.monitor_history_db_path)
+        self._gateway_factory = gateway_factory or (
+            lambda account: BinanceMonitorGateway(settings, account, history_store=self._history_store)
+        )
+        self._gateways: dict[str, UnifiedAccountGateway] = {}
+        self._subscriptions: dict[asyncio.Queue[dict[str, Any]], set[str] | None] = {}
+        self._lock = asyncio.Lock()
+        self._refresh_lock = asyncio.Lock()
+        self._refresh_task: asyncio.Task[None] | None = None
+        self._monitor_enabled = True
+        self._last_payload = self._build_idle_payload("idle", "Waiting for monitor connection")
+
+    def _utc_now(self) -> str:
+        return datetime.now(UTC).isoformat()
+
+    def _normalize(self, payload: Any) -> Any:
+        if isinstance(payload, Decimal):
+            return str(payload)
+        if isinstance(payload, datetime):
+            return payload.isoformat()
+        if isinstance(payload, dict):
+            return {key: self._normalize(value) for key, value in payload.items()}
+        if isinstance(payload, list):
+            return [self._normalize(value) for value in payload]
+        return payload
+
+    def current_snapshot(self, account_ids: list[str] | None = None) -> dict[str, Any]:
+        normalized_ids = self._normalize_account_ids(account_ids)
+        payload = self._filter_payload(self._last_payload, normalized_ids)
+        return self._normalize(self._decorate_payload(payload))
+
+    def current_summary(self, account_ids: list[str] | None = None) -> dict[str, Any]:
+        payload = self.current_snapshot(account_ids)
+        return {
+            "status": payload["status"],
+            "updated_at": payload["updated_at"],
+            "message": payload["message"],
+            "service": payload["service"],
+            "summary": payload["summary"],
+            "profit_summary": payload.get("profit_summary", {}),
+        }
+
+    def current_groups(self, account_ids: list[str] | None = None) -> dict[str, Any]:
+        payload = self.current_snapshot(account_ids)
+        return {
+            "status": payload["status"],
+            "updated_at": payload["updated_at"],
+            "message": payload["message"],
+            "service": payload["service"],
+            "summary": payload["summary"],
+            "profit_summary": payload.get("profit_summary", {}),
+            "groups": payload["groups"],
+        }
+
+    def current_accounts(self, account_ids: list[str] | None = None) -> dict[str, Any]:
+        payload = self.current_snapshot(account_ids)
+        return {
+            "status": payload["status"],
+            "updated_at": payload["updated_at"],
+            "message": payload["message"],
+            "service": payload["service"],
+            "summary": payload["summary"],
+            "profit_summary": payload.get("profit_summary", {}),
+            "accounts": payload["accounts"],
+        }
+
+    async def subscribe(self, account_ids: list[str] | None = None) -> asyncio.Queue[dict[str, Any]]:
+        normalized_ids = self._normalize_account_ids(account_ids)
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=20)
+        async with self._lock:
+            self._subscriptions[queue] = normalized_ids
+            if self._monitor_enabled and self._refresh_task is None:
+                self._refresh_task = asyncio.create_task(self._run_loop())
+        await queue.put(
+            {
+                "event": "monitor_snapshot",
+                "data": self._normalize(self._decorate_payload(self._filter_payload(self._last_payload, normalized_ids))),
+            }
+        )
+        return queue
+
+    @property
+    def monitor_enabled(self) -> bool:
+        return self._monitor_enabled
+
+    async def set_monitor_enabled(self, enabled: bool) -> dict[str, Any]:
+        if self._monitor_enabled == enabled:
+            return self.current_summary()
+        self._monitor_enabled = enabled
+        if not enabled:
+            if self._refresh_task is not None:
+                self._refresh_task.cancel()
+                try:
+                    await self._refresh_task
+                except asyncio.CancelledError:
+                    pass
+                self._refresh_task = None
+        elif self._subscriptions and self._refresh_task is None:
+            self._refresh_task = asyncio.create_task(self._run_loop())
+        await self._broadcast(self._last_payload)
+        return self.current_summary()
+
+    async def refresh_now(self) -> dict[str, Any]:
+        started_at = perf_counter()
+        try:
+            candidate_payload, committed = await self._refresh_once()
+            duration_ms = int((perf_counter() - started_at) * 1000)
+        except RefreshTimeoutError as exc:
+            payload = self.current_groups()
+            payload["refresh_result"] = {
+                "success": False,
+                "timeout": True,
+                "message": "刷新超时，已保留当前数据",
+                "updated_at": self._utc_now(),
+                "duration_ms": exc.duration_ms,
+            }
+            return payload
+        except Exception as exc:
+            duration_ms = int((perf_counter() - started_at) * 1000)
+            payload = self.current_groups()
+            payload["refresh_result"] = {
+                "success": False,
+                "timeout": False,
+                "message": str(exc),
+                "updated_at": self._utc_now(),
+                "duration_ms": duration_ms,
+            }
+            return payload
+
+        payload = self.current_groups()
+        refresh_message = candidate_payload.get("message") or payload.get("message") or "Refresh completed"
+        if not committed:
+            refresh_message = f"Refresh failed, previous data preserved: {refresh_message}"
+        payload["refresh_result"] = {
+            "success": committed,
+            "timeout": False,
+            "message": refresh_message,
+            "updated_at": candidate_payload.get("updated_at", self._utc_now()),
+            "duration_ms": duration_ms,
+        }
+        return payload
+
+    def unsubscribe(self, queue: asyncio.Queue[dict[str, Any]]) -> None:
+        self._subscriptions.pop(queue, None)
+        if not self._subscriptions and self._refresh_task is not None:
+            self._refresh_task.cancel()
+            self._refresh_task = None
+
+    async def close(self) -> None:
+        if self._refresh_task is not None:
+            self._refresh_task.cancel()
+            try:
+                await self._refresh_task
+            except asyncio.CancelledError:
+                pass
+            self._refresh_task = None
+        for gateway in self._gateways.values():
+            await gateway.close()
+        self._gateways.clear()
+        await self._history_store.close()
+
+    async def _run_loop(self) -> None:
+        interval_seconds = max(self._settings.monitor_refresh_interval_ms / 1000, 1.0)
+        while True:
+            try:
+                await self._refresh_once()
+                await asyncio.sleep(interval_seconds)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                await asyncio.sleep(interval_seconds)
+
+    async def _refresh_once(self) -> tuple[dict[str, Any], bool]:
+        async with self._refresh_lock:
+            timeout_seconds = max(self._settings.monitor_refresh_timeout_ms, 1) / 1000
+            started_at = perf_counter()
+            try:
+                payload = await asyncio.wait_for(self._collect_payload(), timeout=timeout_seconds)
+            except asyncio.TimeoutError as exc:
+                duration_ms = int((perf_counter() - started_at) * 1000)
+                raise RefreshTimeoutError(duration_ms) from exc
+            if self._should_commit_payload(payload):
+                self._last_payload = payload
+                await self._broadcast(payload)
+                return payload, True
+            return payload, False
+
+    async def _collect_payload(self) -> dict[str, Any]:
+        accounts = list(self._settings.monitor_accounts.values())
+        if not accounts:
+            return self._build_idle_payload("error", "No monitor accounts configured")
+
+        previous_snapshots = {
+            str(account.get("account_id") or ""): account
+            for account in self._last_payload.get("accounts", [])
+            if isinstance(account, dict)
+        }
+        mark_price_provider = RefreshMarkPriceProvider()
+        semaphore = asyncio.Semaphore(max(1, self._settings.monitor_account_concurrency))
+        snapshots = await asyncio.gather(
+            *(
+                self._fetch_account_snapshot(
+                    account,
+                    previous_snapshot=previous_snapshots.get(account.account_id),
+                    mark_price_provider=mark_price_provider,
+                    semaphore=semaphore,
+                )
+                for account in accounts
+            )
+        )
+        return self._build_payload(snapshots)
+
+    async def _fetch_account_snapshot(
+        self,
+        account: MonitorAccountConfig,
+        *,
+        previous_snapshot: dict[str, Any] | None,
+        mark_price_provider: RefreshMarkPriceProvider,
+        semaphore: asyncio.Semaphore,
+    ) -> dict[str, Any]:
+        gateway = self._gateways.get(account.account_id)
+        if gateway is None:
+            gateway = self._gateway_factory(account)
+            self._gateways[account.account_id] = gateway
+        try:
+            async with semaphore:
+                snapshot = await gateway.get_unified_account_snapshot(
+                    history_window_days=self._settings.monitor_history_window_days,
+                    previous_snapshot=previous_snapshot,
+                    mark_price_provider=mark_price_provider,
+                )
+            snapshot.setdefault("account_id", account.account_id)
+            snapshot.setdefault("account_name", account.display_name)
+            snapshot.setdefault("main_account_id", account.main_account_id)
+            snapshot.setdefault("main_account_name", account.main_account_name)
+            snapshot.setdefault("child_account_id", account.child_account_id)
+            snapshot.setdefault("child_account_name", account.child_account_name)
+            snapshot.setdefault("message", "Account snapshot updated")
+            return snapshot
+        except Exception as exc:
+            return {
+                "status": "error",
+                "source": "papi",
+                "account_id": account.account_id,
+                "account_name": account.display_name,
+                "main_account_id": account.main_account_id,
+                "main_account_name": account.main_account_name,
+                "child_account_id": account.child_account_id,
+                "child_account_name": account.child_account_name,
+                "updated_at": datetime.now(UTC),
+                "message": str(exc),
+                "totals": self._empty_totals(),
+                "positions": [],
+                "assets": [],
+                "income_summary": {
+                    "window_days": self._settings.monitor_history_window_days,
+                    "records": 0,
+                    "total_income": Decimal("0"),
+                    "total_commission": Decimal("0"),
+                    "by_type": {},
+                    "by_asset": {},
+                },
+                "distribution_summary": {
+                    "window_days": self._settings.monitor_history_window_days,
+                    "records": 0,
+                    "total_distribution": Decimal("0"),
+                    "by_type": {},
+                    "by_asset": {},
+                },
+                "interest_summary": {
+                    "window_days": self._settings.monitor_history_window_days,
+                    "records": 0,
+                    "margin_interest_total": Decimal("0"),
+                    "negative_balance_interest_total": Decimal("0"),
+                    "total_interest": Decimal("0"),
+                },
+                "distribution_profit_summary": self._empty_distribution_profit_summary(),
+                "section_errors": {},
+            }
+
+    async def _broadcast(self, payload: dict[str, Any]) -> None:
+        stale: list[asyncio.Queue[dict[str, Any]]] = []
+        for queue, account_ids in list(self._subscriptions.items()):
+            try:
+                queue.put_nowait(
+                    {
+                        "event": "monitor_snapshot",
+                        "data": self._normalize(self._decorate_payload(self._filter_payload(payload, account_ids))),
+                    }
+                )
+            except asyncio.QueueFull:
+                stale.append(queue)
+        for queue in stale:
+            self._subscriptions.pop(queue, None)
+        if not self._subscriptions and self._refresh_task is not None:
+            self._refresh_task.cancel()
+            self._refresh_task = None
+
+    def _filter_payload(self, payload: dict[str, Any], account_ids: set[str] | None) -> dict[str, Any]:
+        if not account_ids:
+            return payload
+        filtered_accounts = [
+            account
+            for account in payload.get("accounts", [])
+            if str(account.get("account_id", "")).lower() in account_ids
+        ]
+        return self._compose_payload(filtered_accounts)
+
+    def _build_payload(self, accounts: list[dict[str, Any]]) -> dict[str, Any]:
+        return self._compose_payload(accounts)
+
+    def _should_commit_payload(self, payload: dict[str, Any]) -> bool:
+        summary = payload.get("summary") or {}
+        account_count = int(summary.get("account_count") or 0)
+        success_count = int(summary.get("success_count") or 0)
+        if account_count == 0:
+            return True
+        return success_count == account_count
+
+    def _decorate_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        service = dict(payload.get("service") or {})
+        service["monitor_enabled"] = self._monitor_enabled
+        if self._monitor_enabled:
+            return {
+                **payload,
+                "service": service,
+            }
+        return {
+            **payload,
+            "status": "disabled",
+            "message": "Monitoring disabled",
+            "service": service,
+        }
+
+    def _compose_payload(self, accounts: list[dict[str, Any]]) -> dict[str, Any]:
+        groups = self._build_groups(accounts)
+        summary = self._summarize_accounts(accounts)
+        profit_summary = self._aggregate_profit_summary(accounts, summary)
+        status, message = self._status_and_message(summary)
+        return {
+            "status": status,
+            "updated_at": self._utc_now(),
+            "message": message,
+            "service": {
+                "refresh_interval_ms": self._settings.monitor_refresh_interval_ms,
+                "refresh_timeout_ms": self._settings.monitor_refresh_timeout_ms,
+                "history_window_days": self._settings.monitor_history_window_days,
+                "account_ids": sorted(self._settings.monitor_accounts.keys()),
+                "main_account_ids": sorted(self._settings.monitor_main_accounts.keys()),
+                "monitor_enabled": self._monitor_enabled,
+            },
+            "summary": summary,
+            "profit_summary": profit_summary,
+            "groups": groups,
+            "accounts": accounts,
+        }
+
+    def _build_idle_payload(self, status: str, message: str) -> dict[str, Any]:
+        return {
+            "status": status,
+            "updated_at": self._utc_now(),
+            "message": message,
+            "service": {
+                "refresh_interval_ms": self._settings.monitor_refresh_interval_ms,
+                "refresh_timeout_ms": self._settings.monitor_refresh_timeout_ms,
+                "history_window_days": self._settings.monitor_history_window_days,
+                "account_ids": sorted(self._settings.monitor_accounts.keys()),
+                "main_account_ids": sorted(self._settings.monitor_main_accounts.keys()),
+                "monitor_enabled": self._monitor_enabled,
+            },
+            "summary": self._summarize_accounts([]),
+            "profit_summary": self._empty_distribution_profit_summary(),
+            "groups": [],
+            "accounts": [],
+        }
+
+    def _build_groups(self, accounts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for account in accounts:
+            main_account_id = str(account.get("main_account_id") or "unknown")
+            grouped.setdefault(main_account_id, []).append(account)
+        groups: list[dict[str, Any]] = []
+        for main_account_id in sorted(grouped):
+            group_accounts = sorted(grouped[main_account_id], key=lambda item: str(item.get("account_id", "")))
+            groups.append(
+                {
+                    "main_account_id": main_account_id,
+                    "main_account_name": group_accounts[0].get("main_account_name", main_account_id),
+                    "summary": self._summarize_accounts(group_accounts),
+                    "accounts": group_accounts,
+                }
+            )
+        return groups
+
+    def _status_and_message(self, summary: dict[str, Any]) -> tuple[str, str]:
+        if summary["account_count"] == 0:
+            return "idle", "No accounts available"
+        if summary["error_count"] == 0:
+            return "ok", "All accounts are healthy"
+        if summary["success_count"] == 0:
+            return "error", "All accounts failed"
+        return "partial", "Some accounts failed"
+
+    def _summarize_accounts(self, accounts: list[dict[str, Any]]) -> dict[str, Any]:
+        totals = self._empty_totals()
+        success_count = 0
+        error_count = 0
+        for account in accounts:
+            if account.get("status") == "ok":
+                success_count += 1
+                account_totals = account.get("totals") or {}
+                for key in totals:
+                    if key == "distribution_apy_7d":
+                        continue
+                    totals[key] += Decimal(str(account_totals.get(key) or "0"))
+            else:
+                error_count += 1
+        totals["distribution_apy_7d"] = self._calculate_distribution_apy(
+            totals["total_distribution"],
+            totals["equity"],
+        )
+        return {
+            "account_count": len(accounts),
+            "success_count": success_count,
+            "error_count": error_count,
+            **totals,
+        }
+
+    def _aggregate_profit_summary(
+        self,
+        accounts: list[dict[str, Any]],
+        summary: dict[str, Any],
+    ) -> dict[str, Any]:
+        aggregated = self._empty_distribution_profit_summary()
+        for key in ("today", "week", "month", "year", "all"):
+            aggregated[key]["complete"] = True
+        equity = Decimal(str(summary.get("equity") or "0"))
+        has_successful_accounts = False
+        for account in accounts:
+            if account.get("status") != "ok":
+                continue
+            has_successful_accounts = True
+            account_profit_summary = account.get("distribution_profit_summary") or {}
+            for key, label in (
+                ("today", "今日收益丨收益率"),
+                ("week", "本周收益丨收益率"),
+                ("month", "本月收益丨收益率"),
+                ("year", "年度收益丨收益率"),
+                ("all", "全部收益丨收益率"),
+            ):
+                period = account_profit_summary.get(key) or {}
+                amount = Decimal(str(period.get("amount") or "0"))
+                aggregated[key]["label"] = label
+                aggregated[key]["amount"] += amount
+                aggregated[key]["complete"] = aggregated[key]["complete"] and bool(period.get("complete"))
+                period_start_at = period.get("start_at")
+                if aggregated[key]["start_at"] is None:
+                    aggregated[key]["start_at"] = period_start_at
+                elif key == "all" and period_start_at is not None:
+                    aggregated[key]["start_at"] = min(str(aggregated[key]["start_at"]), str(period_start_at))
+
+        if not has_successful_accounts:
+            return self._empty_distribution_profit_summary()
+        for key in ("today", "week", "month", "year", "all"):
+            aggregated[key]["rate"] = self._calculate_ratio(aggregated[key]["amount"], equity)
+        aggregated["backfill_complete"] = all(bool(aggregated[key]["complete"]) for key in ("today", "week", "month", "year", "all"))
+        return aggregated
+
+    def _empty_totals(self) -> dict[str, Decimal]:
+        return {
+            "equity": Decimal("0"),
+            "margin": Decimal("0"),
+            "available_balance": Decimal("0"),
+            "unrealized_pnl": Decimal("0"),
+            "total_income": Decimal("0"),
+            "total_commission": Decimal("0"),
+            "total_distribution": Decimal("0"),
+            "distribution_apy_7d": Decimal("0"),
+            "total_interest": Decimal("0"),
+        }
+
+    def _empty_distribution_profit_summary(self) -> dict[str, Any]:
+        def _period(label: str) -> dict[str, Any]:
+            return {
+                "label": label,
+                "amount": Decimal("0"),
+                "rate": Decimal("0"),
+                "start_at": None,
+                "complete": False,
+            }
+
+        return {
+            "today": _period("今日收益丨收益率"),
+            "week": _period("本周收益丨收益率"),
+            "month": _period("本月收益丨收益率"),
+            "year": _period("年度收益丨收益率"),
+            "all": _period("全部收益丨收益率"),
+            "backfill_complete": False,
+        }
+
+    def _calculate_distribution_apy(
+        self,
+        total_distribution: Decimal,
+        equity: Decimal,
+    ) -> Decimal:
+        if equity <= Decimal("0"):
+            return Decimal("0")
+        return (total_distribution / equity) * (Decimal("365") / Decimal("7"))
+
+    def _calculate_ratio(self, amount: Decimal, equity: Decimal) -> Decimal:
+        if equity <= Decimal("0"):
+            return Decimal("0")
+        return amount / equity
+
+    def _normalize_account_ids(self, account_ids: list[str] | None) -> set[str] | None:
+        if not account_ids:
+            return None
+        normalized = {
+            account_id.strip().lower()
+            for account_id in account_ids
+            if account_id and account_id.strip()
+        }
+        return normalized or None

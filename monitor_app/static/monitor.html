@@ -1,0 +1,925 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>币安账户监控台</title>
+  <style>
+    :root {
+      --panel: rgba(255, 255, 255, 0.9);
+      --panel-soft: rgba(255, 255, 255, 0.74);
+      --line: rgba(46, 32, 14, 0.12);
+      --text: #241b12;
+      --muted: #7c6d5d;
+      --accent: #b66c2f;
+      --good: #1f7a48;
+      --warn: #b07a00;
+      --bad: #b54636;
+      --off: #667085;
+      --shadow: 0 18px 45px rgba(48, 31, 12, 0.12);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(255, 210, 140, 0.5), transparent 28%),
+        linear-gradient(180deg, #fbf7f1 0%, #f1e8dc 100%);
+    }
+
+    .shell {
+      width: min(1240px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 18px 0 32px;
+    }
+
+    .hero, .toolbar, .card, .group, .account {
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+    }
+
+    .hero {
+      padding: 20px 28px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .hero-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .hero-title-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      width: 100%;
+      flex-wrap: wrap;
+    }
+
+    .hero h1 {
+      margin: 0;
+      font-size: clamp(26px, 3.6vw, 40px);
+      line-height: 1.08;
+    }
+
+    .hero p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.45;
+      font-size: clamp(15px, 1.4vw, 17px);
+    }
+
+    .hero-actions {
+      display: inline-flex;
+      align-items: flex-start;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-left: auto;
+      flex-wrap: wrap;
+    }
+
+    .hero-controls {
+      display: inline-flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 6px;
+    }
+
+    .toolbar {
+      margin-top: 12px;
+      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .toolbar-main {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      min-width: 0;
+    }
+
+    .toolbar-meta {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .toolbar-stats {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .stat-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 12px;
+      border-radius: 999px;
+      background: var(--panel-soft);
+      border: 1px solid rgba(46, 32, 14, 0.08);
+      font-size: 13px;
+      line-height: 1;
+      white-space: nowrap;
+    }
+
+    .stat-pill-label { color: var(--muted); }
+
+    .stat-pill-value {
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .badge {
+      display: inline-flex;
+      gap: 8px;
+      align-items: center;
+      padding: 7px 12px;
+      border-radius: 999px;
+      background: rgba(182, 108, 47, 0.12);
+      color: var(--accent);
+      font-weight: 700;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .badge::before {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+      flex: 0 0 auto;
+    }
+
+    .status-ok { color: var(--good); background: rgba(31, 122, 72, 0.12); }
+    .status-partial { color: var(--warn); background: rgba(176, 122, 0, 0.12); }
+    .status-error { color: var(--bad); background: rgba(181, 70, 54, 0.12); }
+    .status-disabled { color: var(--off); background: rgba(102, 112, 133, 0.12); }
+
+    .switch {
+      display: inline-flex;
+      align-items: center;
+      gap: 0;
+      padding: 6px;
+      border: 1px solid rgba(46, 32, 14, 0.08);
+      border-radius: 999px;
+      background: var(--panel-soft);
+      white-space: nowrap;
+    }
+
+    .switch input {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .switch-track {
+      width: 46px;
+      height: 26px;
+      border-radius: 999px;
+      background: rgba(124, 109, 93, 0.28);
+      position: relative;
+      transition: background 0.2s ease;
+      flex: 0 0 auto;
+    }
+
+    .switch-track::after {
+      content: "";
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: #fff;
+      box-shadow: 0 2px 10px rgba(36, 27, 18, 0.18);
+      transition: transform 0.2s ease;
+    }
+
+    .switch input:checked + .switch-track {
+      background: rgba(31, 122, 72, 0.48);
+    }
+
+    .switch input:checked + .switch-track::after {
+      transform: translateX(20px);
+    }
+
+    .switch input:disabled + .switch-track {
+      opacity: 0.55;
+    }
+
+    .refresh-button {
+      border: 1px solid rgba(46, 32, 14, 0.08);
+      border-radius: 999px;
+      background: var(--panel-soft);
+      color: var(--text);
+      padding: 8px 14px;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.2s ease, opacity 0.2s ease;
+      min-width: 88px;
+      text-align: center;
+    }
+
+    .refresh-button:hover:not(:disabled) {
+      background: rgba(255, 255, 255, 0.94);
+    }
+
+    .refresh-button:disabled {
+      opacity: 0.6;
+      cursor: default;
+    }
+
+    .summary {
+      margin-top: 18px;
+      display: grid;
+      gap: 14px;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    }
+
+    .profit-summary {
+      margin-top: 18px;
+      display: grid;
+      gap: 14px;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    }
+
+    .card { padding: 18px; }
+
+    .label {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 8px;
+    }
+
+    .value {
+      font-size: clamp(18px, 2.6vw, 26px);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      line-height: 1.2;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .value-positive { color: var(--good); }
+    .value-negative { color: var(--bad); }
+    .side-long { color: var(--good); }
+    .side-short { color: var(--bad); }
+
+    .groups {
+      margin-top: 20px;
+      display: grid;
+      gap: 18px;
+    }
+
+    .group { overflow: hidden; }
+
+    .group-head {
+      padding: 18px 22px;
+      background: rgba(255, 248, 239, 0.84);
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .group-head h2 { margin: 0; }
+
+    .group-badges {
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .group-summary {
+      padding: 18px 22px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 12px;
+    }
+
+    .account-list {
+      padding: 0 22px 22px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .account { overflow: hidden; }
+
+    .account-head {
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .account-head h3 { margin: 0; }
+
+    .account-grid {
+      padding: 16px 18px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 12px;
+    }
+
+    .metric {
+      border: 1px solid rgba(46, 32, 14, 0.08);
+      border-radius: 18px;
+      padding: 14px;
+      background: rgba(255, 255, 255, 0.7);
+      min-width: 0;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+      table-layout: fixed;
+    }
+
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(46, 32, 14, 0.06);
+      text-align: left;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      font-variant-numeric: tabular-nums;
+    }
+
+    th { color: var(--muted); }
+
+    .section { padding: 0 18px 18px; }
+
+    .section h4 {
+      margin: 0 0 12px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .empty { color: var(--muted); padding: 10px 0; }
+
+    .card-note {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .mono {
+      font-family: Consolas, monospace;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      font-variant-numeric: tabular-nums;
+    }
+
+    @media (max-width: 768px) {
+      .shell { width: min(100vw - 20px, 1240px); }
+      .hero { padding: 18px 18px; }
+      .hero-title-row { align-items: flex-start; }
+      .hero-actions {
+        justify-content: flex-start;
+        margin-left: 0;
+      }
+      .toolbar { padding: 12px 16px; }
+      table { display: block; overflow-x: auto; }
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <div class="hero-head">
+        <div class="hero-title-row">
+          <h1>币安账户监控台</h1>
+          <div class="hero-actions">
+            <div class="badge" id="connectionBadge">连接中</div>
+            <div class="hero-controls">
+              <label class="switch" for="monitorToggle">
+                <input type="checkbox" id="monitorToggle" checked>
+                <span class="switch-track" aria-hidden="true"></span>
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p>步步为营，稳中求胜</p>
+    </section>
+
+    <section class="toolbar">
+      <div class="toolbar-main">
+        <div id="messageText">正在等待监控数据</div>
+        <div class="toolbar-stats" id="toolbarStats"></div>
+      </div>
+      <div class="toolbar-meta">
+        <div class="mono" id="updatedAt">-</div>
+        <button class="refresh-button" id="refreshButton" type="button">立即刷新</button>
+      </div>
+    </section>
+
+    <section class="summary" id="summaryCards"></section>
+    <section class="profit-summary" id="profitCards"></section>
+    <section class="groups" id="groupsContainer"></section>
+  </main>
+
+  <script>
+    const summaryCards = document.getElementById('summaryCards');
+    const profitCards = document.getElementById('profitCards');
+    const groupsContainer = document.getElementById('groupsContainer');
+    const connectionBadge = document.getElementById('connectionBadge');
+    const messageText = document.getElementById('messageText');
+    const updatedAt = document.getElementById('updatedAt');
+    const toolbarStats = document.getElementById('toolbarStats');
+    const monitorToggle = document.getElementById('monitorToggle');
+    const refreshButton = document.getElementById('refreshButton');
+    const query = new URLSearchParams(window.location.search);
+    const accountIds = query.get('account_ids');
+    const groupsUrl = accountIds ? `/api/monitor/groups?account_ids=${encodeURIComponent(accountIds)}` : '/api/monitor/groups';
+    const streamUrl = accountIds ? `/stream/monitor?account_ids=${encodeURIComponent(accountIds)}` : '/stream/monitor';
+    let toggleBusy = false;
+    let refreshBusy = false;
+    let refreshCooldownSeconds = 0;
+    let refreshCooldownTimer = null;
+
+    function fmt(value) {
+      const number = Number(value || 0);
+      return Number.isFinite(number)
+        ? number.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+        : String(value ?? '-');
+    }
+
+    function fmtCount(value) {
+      const number = Number(value || 0);
+      return Number.isFinite(number) ? number.toLocaleString('zh-CN') : String(value ?? '0');
+    }
+
+    function fmtTime(value) {
+      if (!value) return '-';
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      return date.toLocaleString('zh-CN', { hour12: false });
+    }
+
+    function fmtPercent(value) {
+      const number = Number(value || 0);
+      return Number.isFinite(number)
+        ? `${(number * 100).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`
+        : '-';
+    }
+
+    function numberTone(value) {
+      const number = Number(value);
+      if (!Number.isFinite(number) || number === 0) {
+        return '';
+      }
+      return number > 0 ? 'value-positive' : 'value-negative';
+    }
+
+    function textStatus(status) {
+      const statusMap = {
+        ok: '正常',
+        partial: '部分异常',
+        error: '异常',
+        idle: '待连接',
+        reconnecting: '重连中',
+        disabled: '监控已关闭',
+      };
+      return statusMap[status] || status || '未知';
+    }
+
+    function textMessage(message) {
+      const messageMap = {
+        'Waiting for monitor connection': '正在等待监控连接',
+        'No accounts available': '当前没有可用账户',
+        'All accounts are healthy': '所有账户运行正常',
+        'All accounts failed': '所有账户均拉取失败',
+        'Some accounts failed': '部分账户拉取失败',
+        'Monitoring disabled': '监控已关闭，已暂停自动刷新',
+      };
+      return messageMap[message] || message || '-';
+    }
+
+    function textAccountStatus(status) {
+      const statusMap = {
+        NORMAL: '正常',
+      };
+      return statusMap[status] || status || '-';
+    }
+
+    function textPositionSide(side) {
+      const sideMap = {
+        LONG: '多',
+        SHORT: '空',
+        BOTH: '双向',
+      };
+      return sideMap[side] || side || '-';
+    }
+
+    function positionSideTone(side) {
+      if (side === 'LONG') return 'side-long';
+      if (side === 'SHORT') return 'side-short';
+      return '';
+    }
+
+    function statusClass(status) {
+      if (status === 'ok') return 'status-ok';
+      if (status === 'partial' || status === 'reconnecting') return 'status-partial';
+      if (status === 'error') return 'status-error';
+      if (status === 'disabled') return 'status-disabled';
+      return '';
+    }
+
+    function refreshButtonLabel() {
+      if (refreshCooldownSeconds > 0) {
+        return `${refreshCooldownSeconds}秒`;
+      }
+      return '立即刷新';
+    }
+
+    function applyRefreshButtonState() {
+      refreshButton.textContent = refreshButtonLabel();
+      refreshButton.disabled = refreshCooldownSeconds > 0;
+    }
+
+    function startRefreshCooldown(seconds = 30) {
+      if (refreshCooldownTimer !== null) {
+        window.clearInterval(refreshCooldownTimer);
+        refreshCooldownTimer = null;
+      }
+      refreshCooldownSeconds = Math.max(0, Number(seconds) || 0);
+      applyRefreshButtonState();
+      if (refreshCooldownSeconds <= 0) {
+        return;
+      }
+      refreshCooldownTimer = window.setInterval(() => {
+        refreshCooldownSeconds = Math.max(0, refreshCooldownSeconds - 1);
+        if (refreshCooldownSeconds === 0 && refreshCooldownTimer !== null) {
+          window.clearInterval(refreshCooldownTimer);
+          refreshCooldownTimer = null;
+        }
+        applyRefreshButtonState();
+      }, 1000);
+    }
+
+    function syncMonitorToggle(payload = {}) {
+      const enabled = payload.service?.monitor_enabled !== false;
+      monitorToggle.checked = enabled;
+      monitorToggle.disabled = toggleBusy || refreshBusy;
+      applyRefreshButtonState();
+    }
+
+    function renderToolbarStats(summary = {}) {
+      const stats = [
+        { label: '总账户数', value: fmtCount(summary.account_count), tone: '' },
+        { label: '正常账户', value: fmtCount(summary.success_count), tone: 'value-positive' },
+        { label: '异常账户', value: fmtCount(summary.error_count), tone: 'value-negative' },
+      ];
+      toolbarStats.innerHTML = stats.map(({ label, value, tone }) => `
+        <div class="stat-pill">
+          <span class="stat-pill-label">${label}</span>
+          <span class="stat-pill-value ${tone}">${value}</span>
+        </div>
+      `).join('');
+    }
+
+    function renderSummary(summary = {}) {
+      const cards = [
+        { label: '权益', value: fmt(summary.equity), tone: '' },
+        { label: '保证金', value: fmt(summary.margin), tone: '' },
+        { label: '可用余额', value: fmt(summary.available_balance), tone: '' },
+        { label: '未实现盈亏', value: fmt(summary.unrealized_pnl), tone: numberTone(summary.unrealized_pnl) },
+        { label: '分发收益', value: fmt(summary.total_distribution), tone: numberTone(summary.total_distribution) },
+        { label: '7日年化', value: fmtPercent(summary.distribution_apy_7d), tone: numberTone(summary.distribution_apy_7d) },
+      ];
+      summaryCards.innerHTML = cards.map(({ label, value, tone }) => `
+        <article class="card">
+          <div class="label">${label}</div>
+          <div class="value ${tone}">${value}</div>
+        </article>
+      `).join('');
+    }
+
+    function renderProfitSummary(profitSummary = {}) {
+      const periods = ['today', 'week', 'month', 'year', 'all']
+        .map((key) => profitSummary[key])
+        .filter(Boolean);
+
+      if (!periods.length) {
+        profitCards.innerHTML = '';
+        return;
+      }
+
+      profitCards.innerHTML = periods.map((period) => {
+        const tone = numberTone(period.amount);
+        const note = period.complete ? '' : '<div class="card-note">历史回补中</div>';
+        return `
+          <article class="card">
+            <div class="label">${period.label}</div>
+            <div class="value ${tone}">${fmt(period.amount)}丨${fmtPercent(period.rate)}</div>
+            ${note}
+          </article>
+        `;
+      }).join('');
+    }
+
+    function renderSummary(summary = {}) {
+      const cards = [
+        { label: '\u6743\u76ca', value: fmt(summary.equity), tone: '' },
+        { label: '\u4fdd\u8bc1\u91d1', value: fmt(summary.margin), tone: '' },
+        { label: '\u53ef\u7528\u4f59\u989d', value: fmt(summary.available_balance), tone: '' },
+        { label: '\u672a\u5b9e\u73b0\u76c8\u4e8f', value: fmt(summary.unrealized_pnl), tone: numberTone(summary.unrealized_pnl) },
+        { label: '\u624b\u7eed\u8d39', value: fmt(summary.total_commission), tone: numberTone(summary.total_commission) },
+        { label: '7\u65e5\u5e74\u5316', value: fmtPercent(summary.distribution_apy_7d), tone: numberTone(summary.distribution_apy_7d) },
+      ];
+      summaryCards.innerHTML = cards.map(({ label, value, tone }) => `
+        <article class="card">
+          <div class="label">${label}</div>
+          <div class="value ${tone}">${value}</div>
+        </article>
+      `).join('');
+    }
+
+    function renderRows(headers, rows, formatter) {
+      if (!rows || rows.length === 0) {
+        return '<div class="empty">暂无数据</div>';
+      }
+      return `
+        <table>
+          <thead><tr>${headers.map((header) => `<th>${header}</th>`).join('')}</tr></thead>
+          <tbody>${rows.map((row) => formatter(row)).join('')}</tbody>
+        </table>
+      `;
+    }
+
+    function renderAccount(account) {
+      const totals = account.totals || {};
+      return `
+        <article class="account">
+          <div class="account-head">
+            <div>
+              <h3>${account.child_account_name || account.account_name || account.account_id}</h3>
+              <div class="mono">${account.account_id} | ${textAccountStatus(account.account_status)}</div>
+            </div>
+            <div class="badge ${statusClass(account.status)}">${textStatus(account.status)}</div>
+          </div>
+          <div class="account-grid">
+            ${[
+              { label: '权益', value: fmt(totals.equity), tone: '' },
+              { label: '保证金', value: fmt(totals.margin), tone: '' },
+              { label: '可用余额', value: fmt(totals.available_balance), tone: '' },
+              { label: '未实现盈亏', value: fmt(totals.unrealized_pnl), tone: numberTone(totals.unrealized_pnl) },
+              { label: '分发收益', value: fmt(totals.total_distribution), tone: numberTone(totals.total_distribution) },
+              { label: '7日年化', value: fmtPercent(totals.distribution_apy_7d), tone: numberTone(totals.distribution_apy_7d) },
+            ].map(({ label, value, tone }) => `
+              <div class="metric">
+                <div class="label">${label}</div>
+                <div class="value ${tone}">${value}</div>
+              </div>
+            `).join('')}
+          </div>
+          <div class="section">
+            <h4>持仓</h4>
+            ${renderRows(
+              ['交易对', '方向', '数量', '开仓价', '标记价', '未实现盈亏', '名义价值', '杠杆'],
+              account.positions || [],
+              (row) => `
+                <tr>
+                  <td class="mono">${row.symbol || '-'}</td>
+                  <td class="${positionSideTone(row.position_side)}">${textPositionSide(row.position_side)}</td>
+                  <td>${fmt(row.qty)}</td>
+                  <td>${fmt(row.entry_price)}</td>
+                  <td>${fmt(row.mark_price)}</td>
+                  <td class="${numberTone(row.unrealized_pnl)}">${fmt(row.unrealized_pnl)}</td>
+                  <td>${fmt(row.notional)}</td>
+                  <td>${fmtCount(row.leverage || 0)}x</td>
+                </tr>
+              `
+            )}
+          </div>
+          <div class="section">
+            <h4>资产</h4>
+            ${renderRows(
+              ['资产', '钱包余额', '可用余额', '保证金余额', '全仓未实现盈亏', '可提数量'],
+              account.assets || [],
+              (row) => `
+                <tr>
+                  <td class="mono">${row.asset || '-'}</td>
+                  <td>${fmt(row.wallet_balance)}</td>
+                  <td>${fmt(row.available_balance)}</td>
+                  <td>${fmt(row.margin_balance)}</td>
+                  <td class="${numberTone(row.cross_unrealized_pnl)}">${fmt(row.cross_unrealized_pnl)}</td>
+                  <td>${fmt(row.max_withdraw_amount)}</td>
+                </tr>
+              `
+            )}
+          </div>
+        </article>
+      `;
+    }
+
+    function renderGroup(group) {
+      const summary = group.summary || {};
+      return `
+        <section class="group">
+          <div class="group-head">
+            <div>
+              <h2>${group.main_account_name || group.main_account_id}</h2>
+              <div class="mono">${group.main_account_id}</div>
+            </div>
+            <div class="group-badges">${renderGroupStatusBadges(summary)}</div>
+          </div>
+          <div class="group-summary">
+            ${[
+              { label: '权益', value: fmt(summary.equity), tone: '' },
+              { label: '保证金', value: fmt(summary.margin), tone: '' },
+              { label: '可用余额', value: fmt(summary.available_balance), tone: '' },
+              { label: '未实现盈亏', value: fmt(summary.unrealized_pnl), tone: numberTone(summary.unrealized_pnl) },
+              { label: '分发收益', value: fmt(summary.total_distribution), tone: numberTone(summary.total_distribution) },
+              { label: '7日年化', value: fmtPercent(summary.distribution_apy_7d), tone: numberTone(summary.distribution_apy_7d) },
+            ].map(({ label, value, tone }) => `
+              <div class="metric">
+                <div class="label">${label}</div>
+                <div class="value ${tone}">${value}</div>
+              </div>
+            `).join('')}
+          </div>
+          <div class="account-list">
+            ${(group.accounts || []).map(renderAccount).join('')}
+          </div>
+        </section>
+      `;
+    }
+
+    function renderGroupStatusBadges(summary = {}) {
+      const successCount = Number(summary.success_count || 0);
+      const errorCount = Number(summary.error_count || 0);
+      const badges = [];
+
+      if (successCount > 0) {
+        badges.push(`<div class="badge status-ok">${fmtCount(successCount)} 正常</div>`);
+      }
+
+      if (errorCount > 0) {
+        badges.push(`<div class="badge status-error">${fmtCount(errorCount)} 异常</div>`);
+      }
+
+      if (badges.length === 0) {
+        badges.push(`<div class="badge">${fmtCount(summary.account_count || 0)} 个账户</div>`);
+      }
+
+      return badges.join('');
+    }
+
+    function render(payload) {
+      const status = payload.status || 'idle';
+      connectionBadge.textContent = textStatus(status);
+      connectionBadge.className = `badge ${statusClass(status)}`;
+      messageText.textContent = textMessage(payload.message);
+      updatedAt.textContent = `更新时间：${fmtTime(payload.updated_at)}`;
+      syncMonitorToggle(payload);
+      renderToolbarStats(payload.summary || {});
+      renderSummary(payload.summary || {});
+      renderProfitSummary(payload.profit_summary || {});
+      const groups = payload.groups || [];
+      groupsContainer.innerHTML = groups.length
+        ? groups.map(renderGroup).join('')
+        : '<section class="group"><div class="group-head"><h2>暂无分组</h2></div></section>';
+    }
+
+    async function setMonitorEnabled(enabled) {
+      toggleBusy = true;
+      monitorToggle.disabled = true;
+      applyRefreshButtonState();
+      try {
+        const response = await fetch('/api/monitor/control', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled }),
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        const payload = await response.json();
+        render(payload);
+      } catch (error) {
+        messageText.textContent = `立即刷新失败：${error}`;
+        return;
+        monitorToggle.checked = !enabled;
+        messageText.textContent = `监控状态更新失败：${error}`;
+      } finally {
+        toggleBusy = false;
+        monitorToggle.disabled = refreshBusy;
+        applyRefreshButtonState();
+      }
+    }
+
+    async function refreshNow() {
+      if (refreshBusy) {
+        messageText.textContent = '上一轮刷新仍在进行中，当前数据保持不变';
+        return;
+      }
+
+      refreshBusy = true;
+      const refreshStartedAt = Date.now();
+      monitorToggle.disabled = true;
+      messageText.textContent = '正在刷新，当前数据保持不变，等待新数据返回后自动更新';
+      try {
+        const response = await fetch('/api/monitor/refresh', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        const payload = await response.json();
+        render(payload);
+        const refreshResult = payload.refresh_result || { success: true, message: payload.message };
+        const elapsedSeconds = Math.max(1, Math.round((Date.now() - refreshStartedAt) / 1000));
+        if (refreshResult.success) {
+          messageText.textContent = `刷新成功，耗时 ${elapsedSeconds} 秒，数据已更新`;
+        } else {
+          messageText.textContent = `刷新失败，已保留当前数据：${refreshResult.message}`;
+        }
+        return;
+      } catch (error) {
+        messageText.textContent = `立即刷新失败：${error}`;
+      } finally {
+        refreshBusy = false;
+        monitorToggle.disabled = toggleBusy;
+      }
+    }
+
+    async function bootstrap() {
+      try {
+        const response = await fetch(groupsUrl, { cache: 'no-store' });
+        if (response.ok) {
+          render(await response.json());
+        }
+      } catch (error) {
+        messageText.textContent = `初始化失败：${error}`;
+      }
+
+      monitorToggle.addEventListener('change', () => {
+        if (toggleBusy) {
+          return;
+        }
+        setMonitorEnabled(monitorToggle.checked);
+      });
+
+      refreshButton.addEventListener('click', () => {
+        if (refreshBusy) {
+          messageText.textContent = '上一轮刷新仍在进行中，当前数据保持不变';
+          return;
+        }
+        if (refreshCooldownSeconds > 0) {
+          return;
+        }
+        startRefreshCooldown(30);
+        refreshNow();
+      });
+
+      const source = new EventSource(streamUrl);
+      source.addEventListener('monitor_snapshot', (event) => {
+        render(JSON.parse(event.data));
+      });
+      source.onerror = () => {
+        connectionBadge.textContent = textStatus('reconnecting');
+        connectionBadge.className = `badge ${statusClass('reconnecting')}`;
+      };
+    }
+
+    applyRefreshButtonState();
+    bootstrap();
+  </script>
+</body>
+</html>
