@@ -1,16 +1,16 @@
 # binance-account-monitor
 
-Independent Binance unified account monitor web service.
+独立部署的币安统一账户监控 Web 服务。
 
-## Features
+## 功能说明
 
-- Separate deployment from the paired opener project
-- Hierarchical monitor configuration: main account -> child accounts
-- Unified account snapshot aggregation
-- REST API + SSE streaming updates
-- Standalone monitor web console
+- 可与配对开单项目分离部署
+- 支持主账户 -> 子账户的分层监控配置
+- 支持统一账户快照聚合
+- 提供 REST API 与 SSE 实时推送
+- 自带独立的监控 Web 控制台
 
-## Setup
+## 环境准备
 
 ```powershell
 python -m venv .venv
@@ -20,22 +20,26 @@ Copy-Item .env.example .env
 Copy-Item config\binance_monitor_accounts.example.json config\binance_monitor_accounts.json
 ```
 
-## Run
+如果你跳过最后两步复制命令，重启脚本会在首次运行时自动根据模板补齐缺失的配置文件，然后提示你先填写真实配置再重新启动。
+
+## 启动方式
 
 ```powershell
 binance-account-monitor
 ```
 
-Or use:
+或者使用：
 
 ```powershell
 scripts\restart_monitor_service.bat
 ```
 
-The local deployment defaults to `127.0.0.1:8010` via `.env`.
-Port `8000` is intentionally not used for this project.
+当 `.env` 或 `config\binance_monitor_accounts.json` 缺失时，重启脚本会自动从示例模板生成文件，并停止启动流程，提醒你先填写自己的 Binance API 凭证。
 
-## Endpoints
+本地默认监听地址为 `127.0.0.1:8010`，配置来源于 `.env`。  
+本项目明确不使用 `8000` 端口。
+
+## 接口列表
 
 - `GET /healthz`
 - `GET /api/monitor/summary`
@@ -43,10 +47,10 @@ Port `8000` is intentionally not used for this project.
 - `GET /api/monitor/accounts`
 - `GET /stream/monitor`
 
-## Config
+## 配置说明
 
-The service reads child account API credentials from:
+服务会从以下文件读取子账户 API 凭证：
 
 - `config/binance_monitor_accounts.json`
 
-Main accounts are grouping nodes only. Child accounts carry the actual Binance API credentials.
+主账户只作为分组节点使用，真正的 Binance API 凭证由子账户承担。

@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 from time import perf_counter
 from typing import Any, Callable, Protocol
+from uuid import uuid4
 
 from monitor_app.binance import BinanceMonitorGateway, RefreshMarkPriceProvider
 from monitor_app.config import MonitorAccountConfig, Settings
 from monitor_app.history_store import MonitorHistoryStore
+
+logger = logging.getLogger("uvicorn.error")
 
 
 class UnifiedAccountGateway(Protocol):
@@ -20,15 +24,17 @@ class UnifiedAccountGateway(Protocol):
         interest_limit: int = 100,
         previous_snapshot: dict[str, Any] | None = None,
         mark_price_provider: RefreshMarkPriceProvider | None = None,
+        refresh_id: str | None = None,
     ) -> dict[str, Any]: ...
 
     async def close(self) -> None: ...
 
 
 class RefreshTimeoutError(RuntimeError):
-    def __init__(self, duration_ms: int) -> None:
+    def __init__(self, duration_ms: int, *, refresh_id: str) -> None:
         super().__init__("Refresh timed out, previous data preserved")
         self.duration_ms = duration_ms
+        self.refresh_id = refresh_id
 
 
 class AccountMonitorController:
@@ -142,8 +148,9 @@ class AccountMonitorController:
 
     async def refresh_now(self) -> dict[str, Any]:
         started_at = perf_counter()
+        refresh_id = self._new_refresh_id()
         try:
-            candidate_payload, committed = await self._refresh_once()
+            candidate_payload, committed = await self._refresh_once(refresh_id=refresh_id, reason="manual")
             duration_ms = int((perf_counter() - started_at) * 1000)
         except RefreshTimeoutError as exc:
             payload = self.current_groups()
@@ -153,7 +160,12 @@ class AccountMonitorController:
                 "message": "刷新超时，已保留当前数据",
                 "updated_at": self._utc_now(),
                 "duration_ms": exc.duration_ms,
+                "refresh_id": exc.refresh_id,
+                "failed_accounts": [],
+                "fallback_sections": [],
+                "timings": {"total_ms": exc.duration_ms},
             }
+            payload["refresh_result"]["message"] = "刷新超时，已保留当前数据"
             return payload
         except Exception as exc:
             duration_ms = int((perf_counter() - started_at) * 1000)
@@ -164,20 +176,31 @@ class AccountMonitorController:
                 "message": str(exc),
                 "updated_at": self._utc_now(),
                 "duration_ms": duration_ms,
+                "refresh_id": refresh_id,
+                "failed_accounts": [],
+                "fallback_sections": [],
+                "timings": {"total_ms": duration_ms},
             }
             return payload
 
         payload = self.current_groups()
+        refresh_meta = candidate_payload.get("refresh_meta") or {}
         refresh_message = candidate_payload.get("message") or payload.get("message") or "Refresh completed"
         if not committed:
-            refresh_message = f"Refresh failed, previous data preserved: {refresh_message}"
+            refresh_message = f"刷新失败，已保留当前数据：{refresh_message}"
         payload["refresh_result"] = {
             "success": committed,
             "timeout": False,
             "message": refresh_message,
             "updated_at": candidate_payload.get("updated_at", self._utc_now()),
             "duration_ms": duration_ms,
+            "refresh_id": refresh_meta.get("refresh_id", refresh_id),
+            "failed_accounts": refresh_meta.get("failed_accounts", []),
+            "fallback_sections": refresh_meta.get("fallback_sections", []),
+            "timings": refresh_meta.get("timings", {"total_ms": duration_ms}),
         }
+        if not committed:
+            payload["refresh_result"]["message"] = f"刷新失败，已保留当前数据：{candidate_payload.get('message') or payload.get('message') or 'Refresh completed'}"
         return payload
 
     def unsubscribe(self, queue: asyncio.Queue[dict[str, Any]]) -> None:
@@ -203,29 +226,62 @@ class AccountMonitorController:
         interval_seconds = max(self._settings.monitor_refresh_interval_ms / 1000, 1.0)
         while True:
             try:
-                await self._refresh_once()
+                await self._refresh_once(refresh_id=self._new_refresh_id(), reason="auto")
                 await asyncio.sleep(interval_seconds)
             except asyncio.CancelledError:
                 raise
             except Exception:
                 await asyncio.sleep(interval_seconds)
 
-    async def _refresh_once(self) -> tuple[dict[str, Any], bool]:
+    async def _refresh_once(self, *, refresh_id: str, reason: str) -> tuple[dict[str, Any], bool]:
         async with self._refresh_lock:
             timeout_seconds = max(self._settings.monitor_refresh_timeout_ms, 1) / 1000
             started_at = perf_counter()
+            logger.info(
+                "Refresh started refresh_id=%s reason=%s timeout_ms=%s",
+                refresh_id,
+                reason,
+                self._settings.monitor_refresh_timeout_ms,
+            )
             try:
-                payload = await asyncio.wait_for(self._collect_payload(), timeout=timeout_seconds)
+                payload = await asyncio.wait_for(self._collect_payload(refresh_id=refresh_id), timeout=timeout_seconds)
             except asyncio.TimeoutError as exc:
                 duration_ms = int((perf_counter() - started_at) * 1000)
-                raise RefreshTimeoutError(duration_ms) from exc
+                logger.warning(
+                    "Refresh timed out refresh_id=%s reason=%s duration_ms=%s",
+                    refresh_id,
+                    reason,
+                    duration_ms,
+                )
+                raise RefreshTimeoutError(duration_ms, refresh_id=refresh_id) from exc
+            duration_ms = int((perf_counter() - started_at) * 1000)
+            payload.setdefault("refresh_meta", {})
+            payload["refresh_meta"].setdefault("timings", {})
+            payload["refresh_meta"]["timings"]["total_ms"] = duration_ms
+            payload["refresh_meta"]["reason"] = reason
             if self._should_commit_payload(payload):
                 self._last_payload = payload
                 await self._broadcast(payload)
+                logger.info(
+                    "Refresh committed refresh_id=%s reason=%s duration_ms=%s success_count=%s error_count=%s fallback_count=%s",
+                    refresh_id,
+                    reason,
+                    duration_ms,
+                    payload.get("summary", {}).get("success_count", 0),
+                    payload.get("summary", {}).get("error_count", 0),
+                    len(payload.get("refresh_meta", {}).get("fallback_sections", [])),
+                )
                 return payload, True
+            logger.warning(
+                "Refresh preserved previous payload refresh_id=%s reason=%s duration_ms=%s failed_accounts=%s",
+                refresh_id,
+                reason,
+                duration_ms,
+                payload.get("refresh_meta", {}).get("failed_accounts", []),
+            )
             return payload, False
 
-    async def _collect_payload(self) -> dict[str, Any]:
+    async def _collect_payload(self, *, refresh_id: str) -> dict[str, Any]:
         accounts = list(self._settings.monitor_accounts.values())
         if not accounts:
             return self._build_idle_payload("error", "No monitor accounts configured")
@@ -244,11 +300,13 @@ class AccountMonitorController:
                     previous_snapshot=previous_snapshots.get(account.account_id),
                     mark_price_provider=mark_price_provider,
                     semaphore=semaphore,
+                    refresh_id=refresh_id,
                 )
                 for account in accounts
             )
         )
-        return self._build_payload(snapshots)
+        refresh_meta = self._build_refresh_meta(refresh_id=refresh_id, accounts=snapshots)
+        return self._build_payload(snapshots, refresh_meta=refresh_meta)
 
     async def _fetch_account_snapshot(
         self,
@@ -257,17 +315,20 @@ class AccountMonitorController:
         previous_snapshot: dict[str, Any] | None,
         mark_price_provider: RefreshMarkPriceProvider,
         semaphore: asyncio.Semaphore,
+        refresh_id: str,
     ) -> dict[str, Any]:
         gateway = self._gateways.get(account.account_id)
         if gateway is None:
             gateway = self._gateway_factory(account)
             self._gateways[account.account_id] = gateway
+        started_at = perf_counter()
         try:
             async with semaphore:
                 snapshot = await gateway.get_unified_account_snapshot(
                     history_window_days=self._settings.monitor_history_window_days,
                     previous_snapshot=previous_snapshot,
                     mark_price_provider=mark_price_provider,
+                    refresh_id=refresh_id,
                 )
             snapshot.setdefault("account_id", account.account_id)
             snapshot.setdefault("account_name", account.display_name)
@@ -276,6 +337,10 @@ class AccountMonitorController:
             snapshot.setdefault("child_account_id", account.child_account_id)
             snapshot.setdefault("child_account_name", account.child_account_name)
             snapshot.setdefault("message", "Account snapshot updated")
+            snapshot.setdefault("diagnostics", {})
+            snapshot["diagnostics"].setdefault("refresh_id", refresh_id)
+            snapshot["diagnostics"].setdefault("timings", {})
+            snapshot["diagnostics"]["timings"]["controller_total_ms"] = int((perf_counter() - started_at) * 1000)
             return snapshot
         except Exception as exc:
             return {
@@ -316,6 +381,13 @@ class AccountMonitorController:
                 },
                 "distribution_profit_summary": self._empty_distribution_profit_summary(),
                 "section_errors": {},
+                "diagnostics": {
+                    "refresh_id": refresh_id,
+                    "timings": {
+                        "controller_total_ms": int((perf_counter() - started_at) * 1000),
+                    },
+                    "fallback_sections": [],
+                },
             }
 
     async def _broadcast(self, payload: dict[str, Any]) -> None:
@@ -344,10 +416,49 @@ class AccountMonitorController:
             for account in payload.get("accounts", [])
             if str(account.get("account_id", "")).lower() in account_ids
         ]
-        return self._compose_payload(filtered_accounts)
+        return self._compose_payload(filtered_accounts, refresh_meta=payload.get("refresh_meta"))
 
-    def _build_payload(self, accounts: list[dict[str, Any]]) -> dict[str, Any]:
-        return self._compose_payload(accounts)
+    def _build_payload(self, accounts: list[dict[str, Any]], *, refresh_meta: dict[str, Any] | None = None) -> dict[str, Any]:
+        return self._compose_payload(accounts, refresh_meta=refresh_meta)
+
+    def _new_refresh_id(self) -> str:
+        return uuid4().hex[:12]
+
+    def _build_refresh_meta(self, *, refresh_id: str, accounts: list[dict[str, Any]]) -> dict[str, Any]:
+        failed_accounts: list[dict[str, Any]] = []
+        fallback_sections: list[dict[str, Any]] = []
+        timings: dict[str, Any] = {"accounts": {}}
+        for account in accounts:
+            account_id = str(account.get("account_id") or "")
+            diagnostics = account.get("diagnostics") or {}
+            account_timings = diagnostics.get("timings") or {}
+            if account_id:
+                timings["accounts"][account_id] = account_timings
+            if account.get("status") != "ok":
+                failed_accounts.append(
+                    {
+                        "account_id": account_id,
+                        "message": account.get("message", ""),
+                    }
+                )
+            sections = [
+                section_name
+                for section_name, details in (account.get("section_errors") or {}).items()
+                if isinstance(details, dict) and details.get("used_fallback")
+            ]
+            if sections:
+                fallback_sections.append(
+                    {
+                        "account_id": account_id,
+                        "sections": sections,
+                    }
+                )
+        return {
+            "refresh_id": refresh_id,
+            "failed_accounts": failed_accounts,
+            "fallback_sections": fallback_sections,
+            "timings": timings,
+        }
 
     def _should_commit_payload(self, payload: dict[str, Any]) -> bool:
         summary = payload.get("summary") or {}
@@ -372,7 +483,7 @@ class AccountMonitorController:
             "service": service,
         }
 
-    def _compose_payload(self, accounts: list[dict[str, Any]]) -> dict[str, Any]:
+    def _compose_payload(self, accounts: list[dict[str, Any]], *, refresh_meta: dict[str, Any] | None = None) -> dict[str, Any]:
         groups = self._build_groups(accounts)
         summary = self._summarize_accounts(accounts)
         profit_summary = self._aggregate_profit_summary(accounts, summary)
@@ -393,6 +504,7 @@ class AccountMonitorController:
             "profit_summary": profit_summary,
             "groups": groups,
             "accounts": accounts,
+            "refresh_meta": refresh_meta or {},
         }
 
     def _build_idle_payload(self, status: str, message: str) -> dict[str, Any]:
@@ -412,6 +524,7 @@ class AccountMonitorController:
             "profit_summary": self._empty_distribution_profit_summary(),
             "groups": [],
             "accounts": [],
+            "refresh_meta": {},
         }
 
     def _build_groups(self, accounts: list[dict[str, Any]]) -> list[dict[str, Any]]:

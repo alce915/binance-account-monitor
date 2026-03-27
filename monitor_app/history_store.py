@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger("uvicorn.error")
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,6 +31,10 @@ class MonitorHistoryStore:
         self._lock = asyncio.Lock()
         self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        self._source_versions: dict[tuple[str, str], int] = {}
+        self._income_summary_cache: dict[tuple[str, int], tuple[int, dict[str, Any]]] = {}
+        self._distribution_summary_cache: dict[tuple[str, int], tuple[int, dict[str, Any]]] = {}
+        self._distribution_periods_cache: dict[tuple[str, tuple[tuple[str, int | None], ...]], tuple[int, dict[str, Any]]] = {}
         self._initialize()
 
     def _initialize(self) -> None:
@@ -76,6 +83,26 @@ class MonitorHistoryStore:
                 )
                 """
             )
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS history_source_status (
+                    account_id TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    last_success_at_ms INTEGER,
+                    last_successful_end_time INTEGER,
+                    last_failed_at_ms INTEGER,
+                    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+                    last_error_summary TEXT,
+                    PRIMARY KEY (account_id, source)
+                )
+                """
+            )
+            self._conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_history_events_account_source_time
+                ON history_events (account_id, source, event_time_ms)
+                """
+            )
 
     async def close(self) -> None:
         async with self._lock:
@@ -104,10 +131,14 @@ class MonitorHistoryStore:
         last_successful_end_time: int | None,
         retain_after_ms: int | None,
         update_fetch_state: bool = True,
-    ) -> None:
+    ) -> dict[str, int | bool]:
+        history_rows_changed = False
+        inserted_count = 0
+        trimmed_count = 0
         async with self._lock:
             with self._conn:
                 if events:
+                    before_changes = self._conn.total_changes
                     self._conn.executemany(
                         """
                         INSERT OR IGNORE INTO history_events (
@@ -135,6 +166,8 @@ class MonitorHistoryStore:
                             for event in events
                         ],
                     )
+                    inserted_count = self._conn.total_changes - before_changes
+                    history_rows_changed = history_rows_changed or inserted_count > 0
                 if update_fetch_state and last_successful_end_time is not None:
                     self._conn.execute(
                         """
@@ -146,6 +179,7 @@ class MonitorHistoryStore:
                         (account_id, source, last_successful_end_time),
                     )
                 if retain_after_ms is not None:
+                    before_changes = self._conn.total_changes
                     self._conn.execute(
                         """
                         DELETE FROM history_events
@@ -153,8 +187,118 @@ class MonitorHistoryStore:
                         """,
                         (account_id, source, retain_after_ms),
                     )
+                    trimmed_count = self._conn.total_changes - before_changes
+                    history_rows_changed = history_rows_changed or trimmed_count > 0
+            if history_rows_changed:
+                self._bump_source_version(account_id, source)
+        return {
+            "inserted_count": max(inserted_count, 0),
+            "trimmed_count": max(trimmed_count, 0),
+            "history_changed": history_rows_changed,
+        }
+
+    async def record_source_success(
+        self,
+        account_id: str,
+        source: str,
+        *,
+        last_successful_end_time: int | None,
+        success_at_ms: int | None = None,
+    ) -> None:
+        success_time = int(success_at_ms or datetime.now(UTC).timestamp() * 1000)
+        async with self._lock:
+            with self._conn:
+                self._conn.execute(
+                    """
+                    INSERT INTO history_source_status (
+                        account_id,
+                        source,
+                        last_success_at_ms,
+                        last_successful_end_time,
+                        last_failed_at_ms,
+                        consecutive_failures,
+                        last_error_summary
+                    ) VALUES (?, ?, ?, ?, NULL, 0, NULL)
+                    ON CONFLICT(account_id, source)
+                    DO UPDATE SET
+                        last_success_at_ms = excluded.last_success_at_ms,
+                        last_successful_end_time = COALESCE(excluded.last_successful_end_time, history_source_status.last_successful_end_time),
+                        last_failed_at_ms = NULL,
+                        consecutive_failures = 0,
+                        last_error_summary = NULL
+                    """,
+                    (account_id, source, success_time, last_successful_end_time),
+                )
+
+    async def record_source_failure(
+        self,
+        account_id: str,
+        source: str,
+        *,
+        error_summary: str,
+        failed_at_ms: int | None = None,
+    ) -> None:
+        failure_time = int(failed_at_ms or datetime.now(UTC).timestamp() * 1000)
+        async with self._lock:
+            with self._conn:
+                self._conn.execute(
+                    """
+                    INSERT INTO history_source_status (
+                        account_id,
+                        source,
+                        last_success_at_ms,
+                        last_successful_end_time,
+                        last_failed_at_ms,
+                        consecutive_failures,
+                        last_error_summary
+                    ) VALUES (?, ?, NULL, NULL, ?, 1, ?)
+                    ON CONFLICT(account_id, source)
+                    DO UPDATE SET
+                        last_failed_at_ms = excluded.last_failed_at_ms,
+                        consecutive_failures = history_source_status.consecutive_failures + 1,
+                        last_error_summary = excluded.last_error_summary
+                    """,
+                    (account_id, source, failure_time, error_summary),
+                )
+
+    async def get_source_status(self, account_id: str, source: str) -> dict[str, Any]:
+        async with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT
+                    last_success_at_ms,
+                    last_successful_end_time,
+                    last_failed_at_ms,
+                    consecutive_failures,
+                    last_error_summary
+                FROM history_source_status
+                WHERE account_id = ? AND source = ?
+                """,
+                (account_id, source),
+            ).fetchone()
+        if row is None:
+            return {
+                "last_success_at_ms": None,
+                "last_successful_end_time": None,
+                "last_failed_at_ms": None,
+                "consecutive_failures": 0,
+                "last_error_summary": None,
+            }
+        return {
+            "last_success_at_ms": int(row["last_success_at_ms"]) if row["last_success_at_ms"] is not None else None,
+            "last_successful_end_time": int(row["last_successful_end_time"]) if row["last_successful_end_time"] is not None else None,
+            "last_failed_at_ms": int(row["last_failed_at_ms"]) if row["last_failed_at_ms"] is not None else None,
+            "consecutive_failures": int(row["consecutive_failures"] or 0),
+            "last_error_summary": row["last_error_summary"],
+        }
 
     async def summarize_income(self, account_id: str, history_window_days: int) -> dict[str, Any]:
+        version = self._source_version(account_id, "income")
+        cache_key = (account_id, history_window_days)
+        cached = self._income_summary_cache.get(cache_key)
+        if cached and cached[0] == version:
+            return self._clone_summary(cached[1])
+
         rows = await self._read_history_rows(account_id, "income", history_window_days)
         by_type: dict[str, Decimal] = {}
         by_asset: dict[str, Decimal] = {}
@@ -168,15 +312,23 @@ class MonitorHistoryStore:
             by_type[event_type] = by_type.get(event_type, Decimal("0")) + amount
             by_asset[asset] = by_asset.get(asset, Decimal("0")) + amount
 
-        return {
+        summary = {
             "window_days": history_window_days,
             "records": len(rows),
             "total_income": total_income,
             "by_type": dict(sorted(by_type.items())),
             "by_asset": dict(sorted(by_asset.items())),
         }
+        self._income_summary_cache[cache_key] = (version, self._clone_summary(summary))
+        return summary
 
     async def summarize_distribution(self, account_id: str, history_window_days: int) -> dict[str, Any]:
+        version = self._source_version(account_id, "distribution")
+        cache_key = (account_id, history_window_days)
+        cached = self._distribution_summary_cache.get(cache_key)
+        if cached and cached[0] == version:
+            return self._clone_summary(cached[1])
+
         rows = await self._read_history_rows(account_id, "distribution", history_window_days)
         by_type: dict[str, Decimal] = {}
         by_asset: dict[str, Decimal] = {}
@@ -190,19 +342,30 @@ class MonitorHistoryStore:
             by_type[event_type] = by_type.get(event_type, Decimal("0")) + amount
             by_asset[asset] = by_asset.get(asset, Decimal("0")) + amount
 
-        return {
+        summary = {
             "window_days": history_window_days,
             "records": len(rows),
             "total_distribution": total_distribution,
             "by_type": dict(sorted(by_type.items())),
             "by_asset": dict(sorted(by_asset.items())),
         }
+        self._distribution_summary_cache[cache_key] = (version, self._clone_summary(summary))
+        return summary
 
     async def summarize_distribution_periods(
         self,
         account_id: str,
         period_starts_ms: dict[str, int | None],
     ) -> dict[str, Any]:
+        version = self._source_version(account_id, "distribution")
+        cache_key = (
+            account_id,
+            tuple(sorted(period_starts_ms.items(), key=lambda item: item[0])),
+        )
+        cached = self._distribution_periods_cache.get(cache_key)
+        if cached and cached[0] == version:
+            return self._clone_summary(cached[1])
+
         rows = await self._read_all_history_rows(account_id, "distribution")
         earliest_event_time_ms = int(rows[0]["event_time_ms"]) if rows else None
         amounts: dict[str, Decimal] = {key: Decimal("0") for key in period_starts_ms}
@@ -214,11 +377,13 @@ class MonitorHistoryStore:
                 if start_ms is None or event_time_ms >= start_ms:
                     amounts[key] += amount
 
-        return {
+        summary = {
             "amounts": amounts,
             "earliest_event_time_ms": earliest_event_time_ms,
             "records": len(rows),
         }
+        self._distribution_periods_cache[cache_key] = (version, self._clone_summary(summary))
+        return summary
 
     async def is_distribution_backfill_complete(self, account_id: str) -> bool:
         async with self._lock:
@@ -359,3 +524,17 @@ class MonitorHistoryStore:
     def _window_start_ms(self, history_window_days: int) -> int:
         start = datetime.now(UTC) - timedelta(days=max(history_window_days, 1))
         return int(start.timestamp() * 1000)
+
+    def _source_version(self, account_id: str, source: str) -> int:
+        return self._source_versions.get((account_id, source), 0)
+
+    def _bump_source_version(self, account_id: str, source: str) -> None:
+        key = (account_id, source)
+        self._source_versions[key] = self._source_versions.get(key, 0) + 1
+
+    def _clone_summary(self, value: Any) -> Any:
+        if isinstance(value, dict):
+            return {key: self._clone_summary(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [self._clone_summary(item) for item in value]
+        return value

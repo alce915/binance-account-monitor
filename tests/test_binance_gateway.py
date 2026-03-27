@@ -259,7 +259,7 @@ async def test_get_unified_account_snapshot_uses_core_and_secondary_retry_budget
     assert snapshot["totals"]["total_distribution"] == Decimal("0")
     assert snapshot["totals"]["total_income"] == Decimal("0")
     assert snapshot["totals"]["total_interest"] == Decimal("0")
-    assert snapshot["distribution_profit_summary"]["all"]["complete"] is False
+    assert snapshot["distribution_profit_summary"]["all"]["complete"] is True
     assert snapshot["positions"][0]["mark_price"] == Decimal("80500")
 
 
@@ -403,3 +403,96 @@ async def test_distribution_backfill_marks_complete_when_no_older_records_exist(
         await gateway.close()
 
     assert completed is True
+
+
+@pytest.mark.asyncio
+async def test_snapshot_marks_secondary_network_failures_as_fallback_sections(tmp_path: Path) -> None:
+    settings = Settings(
+        _env_file=None,
+        monitor_history_db_path=tmp_path / "history.db",
+        binance_secondary_retry_attempts=3,
+    )
+    gateway = BinanceMonitorGateway(
+        settings,
+        MonitorAccountConfig(
+            account_id="group_a.sub1",
+            child_account_id="sub1",
+            child_account_name="Sub One",
+            main_account_id="group_a",
+            main_account_name="Group A",
+            api_key="k",
+            api_secret="s",
+        ),
+    )
+
+    async def fake_signed_request(path: str, params: dict | None = None, *, timeout_s: float | None = None):
+        if path == "/papi/v1/account":
+            return {
+                "accountStatus": "NORMAL",
+                "accountEquity": "1000",
+                "accountInitialMargin": "100",
+                "totalAvailableBalance": "800",
+            }
+        if path == "/papi/v1/um/account":
+            return {
+                "assets": [],
+                "positions": [
+                    {
+                        "symbol": "BTCUSDT",
+                        "positionSide": "LONG",
+                        "positionAmt": "0.01",
+                        "entryPrice": "80000",
+                        "markPrice": "0",
+                        "unrealizedProfit": "5",
+                        "notional": "805",
+                        "leverage": "10",
+                        "liquidationPrice": "70000",
+                    }
+                ],
+            }
+        if path == "/papi/v1/um/income":
+            return []
+        raise AssertionError(path)
+
+    async def failing_signed_request_sapi(path: str, params: dict | None = None, *, timeout_s: float | None = None):
+        raise httpx.ReadTimeout("temporary", request=httpx.Request("GET", f"https://example.com{path}"))
+
+    async def failing_public_request_market(path: str, params: dict | None = None, *, timeout_s: float | None = None):
+        raise httpx.ReadTimeout("temporary", request=httpx.Request("GET", "https://example.com/fapi/v1/premiumIndex"))
+
+    gateway._signed_request = fake_signed_request  # type: ignore[method-assign]
+    gateway._signed_request_sapi = failing_signed_request_sapi  # type: ignore[method-assign]
+    gateway._public_request_market = failing_public_request_market  # type: ignore[method-assign]
+    previous_snapshot = {
+        "positions": [{"symbol": "BTCUSDT", "mark_price": Decimal("81000")}],
+        "assets": [{"asset": "RWUSD", "wallet_balance": Decimal("2"), "cross_wallet_balance": Decimal("0")}],
+        "distribution_summary": {
+            "window_days": 7,
+            "records": 1,
+            "total_distribution": Decimal("2"),
+            "by_type": {"RWUSD rewards distribution": Decimal("2")},
+            "by_asset": {"RWUSD": Decimal("2")},
+        },
+        "distribution_profit_summary": {
+            "today": {"label": "今日收益丨收益率", "amount": Decimal("0.2"), "rate": Decimal("0.0002"), "start_at": None, "complete": True},
+            "week": {"label": "本周收益丨收益率", "amount": Decimal("0.2"), "rate": Decimal("0.0002"), "start_at": None, "complete": True},
+            "month": {"label": "本月收益丨收益率", "amount": Decimal("0.2"), "rate": Decimal("0.0002"), "start_at": None, "complete": True},
+            "year": {"label": "年度收益丨收益率", "amount": Decimal("0.2"), "rate": Decimal("0.0002"), "start_at": None, "complete": True},
+            "all": {"label": "全部收益丨收益率", "amount": Decimal("0.2"), "rate": Decimal("0.0002"), "start_at": None, "complete": True},
+            "backfill_complete": True,
+        },
+    }
+    try:
+        snapshot = await gateway.get_unified_account_snapshot(previous_snapshot=previous_snapshot)
+    finally:
+        await gateway.close()
+
+    assert snapshot["status"] == "ok"
+    assert snapshot["positions"][0]["mark_price"] == Decimal("81000")
+    assert snapshot["distribution_summary"]["total_distribution"] == Decimal("2")
+    assert snapshot["section_errors"]["distribution_history"]["source"] == "network"
+    assert snapshot["section_errors"]["distribution_history"]["used_fallback"] is True
+    assert snapshot["section_errors"]["spot_account"]["source"] == "network"
+    assert snapshot["section_errors"]["spot_account"]["used_fallback"] is True
+    assert snapshot["section_errors"]["mark_prices"]["source"] == "network"
+    assert "mark_prices" in snapshot["diagnostics"]["fallback_sections"]

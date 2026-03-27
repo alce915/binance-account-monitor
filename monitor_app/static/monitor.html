@@ -579,6 +579,7 @@
       refreshCooldownSeconds = Math.max(0, Number(seconds) || 0);
       applyRefreshButtonState();
       if (refreshCooldownSeconds <= 0) {
+        messageText.textContent = describeRefreshResult(refreshResult, elapsedSeconds);
         return;
       }
       refreshCooldownTimer = window.setInterval(() => {
@@ -816,6 +817,28 @@
         : '<section class="group"><div class="group-head"><h2>暂无分组</h2></div></section>';
     }
 
+    function describeRefreshResult(refreshResult, elapsedSeconds) {
+      const failures = Array.isArray(refreshResult.failed_accounts) ? refreshResult.failed_accounts : [];
+      const fallbackSections = Array.isArray(refreshResult.fallback_sections) ? refreshResult.fallback_sections : [];
+
+      if (refreshResult.success) {
+        if (fallbackSections.length > 0) {
+          return `刷新成功，耗时 ${elapsedSeconds} 秒，部分数据沿用了上次成功结果`;
+        }
+        return `刷新成功，耗时 ${elapsedSeconds} 秒，数据已更新`;
+      }
+
+      if (refreshResult.timeout) {
+        return refreshResult.message || '刷新超时，已保留当前数据';
+      }
+
+      if (failures.length > 0) {
+        return refreshResult.message || '刷新失败，已保留当前数据';
+      }
+
+      return refreshResult.message || '刷新失败，已保留当前数据';
+    }
+
     async function setMonitorEnabled(enabled) {
       toggleBusy = true;
       monitorToggle.disabled = true;
@@ -865,6 +888,7 @@
         render(payload);
         const refreshResult = payload.refresh_result || { success: true, message: payload.message };
         const elapsedSeconds = Math.max(1, Math.round((Date.now() - refreshStartedAt) / 1000));
+        messageText.textContent = describeRefreshResult(refreshResult, elapsedSeconds);
         if (refreshResult.success) {
           messageText.textContent = `刷新成功，耗时 ${elapsedSeconds} 秒，数据已更新`;
         } else {

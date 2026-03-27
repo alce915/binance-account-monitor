@@ -22,6 +22,7 @@ class FakeMonitorGateway:
         interest_limit: int = 100,
         previous_snapshot: dict | None = None,
         mark_price_provider=None,
+        refresh_id: str | None = None,
     ) -> dict:
         return {
             "status": "ok",
@@ -73,6 +74,11 @@ class FakeMonitorGateway:
             },
             "interest_summary": {"window_days": history_window_days, "records": 1, "margin_interest_total": Decimal("1.2"), "negative_balance_interest_total": Decimal("0"), "total_interest": Decimal("1.2")},
             "section_errors": {},
+            "diagnostics": {
+                "refresh_id": refresh_id,
+                "timings": {"gateway_total_ms": 12},
+                "fallback_sections": [],
+            },
         }
 
     async def close(self) -> None:
@@ -180,6 +186,7 @@ class SlowMonitorGateway(FakeMonitorGateway):
         interest_limit: int = 100,
         previous_snapshot: dict | None = None,
         mark_price_provider=None,
+        refresh_id: str | None = None,
     ) -> dict:
         SlowMonitorGateway.call_count += 1
         if SlowMonitorGateway.call_count > 1:
@@ -191,6 +198,7 @@ class SlowMonitorGateway(FakeMonitorGateway):
             interest_limit=interest_limit,
             previous_snapshot=previous_snapshot,
             mark_price_provider=mark_price_provider,
+            refresh_id=refresh_id,
         )
 
 
@@ -242,6 +250,7 @@ class FailAfterFirstGateway(FakeMonitorGateway):
         interest_limit: int = 100,
         previous_snapshot: dict | None = None,
         mark_price_provider=None,
+        refresh_id: str | None = None,
     ) -> dict:
         count = FailAfterFirstGateway.call_counts.get(self.account.account_id, 0) + 1
         FailAfterFirstGateway.call_counts[self.account.account_id] = count
@@ -253,6 +262,7 @@ class FailAfterFirstGateway(FakeMonitorGateway):
             interest_limit=interest_limit,
             previous_snapshot=previous_snapshot,
             mark_price_provider=mark_price_provider,
+            refresh_id=refresh_id,
         )
 
 
@@ -287,11 +297,82 @@ async def test_refresh_failure_preserves_previous_payload(tmp_path: Path) -> Non
         await controller.close()
 
     assert first["refresh_result"]["success"] is True
+    assert first["refresh_result"]["refresh_id"]
+    assert first["refresh_result"]["failed_accounts"] == []
+    assert first["refresh_result"]["fallback_sections"] == []
     assert second["refresh_result"]["success"] is False
     assert second["updated_at"] == first_updated_at
     assert second["summary"]["account_count"] == 1
     assert second["summary"]["success_count"] == 1
     assert "duration_ms" in second["refresh_result"]
+    assert second["refresh_result"]["failed_accounts"][0]["account_id"] == "group_a.sub1"
+
+
+class FallbackGateway(FakeMonitorGateway):
+    async def get_unified_account_snapshot(
+        self,
+        *,
+        history_window_days: int = 7,
+        income_limit: int = 100,
+        interest_limit: int = 100,
+        previous_snapshot: dict | None = None,
+        mark_price_provider=None,
+        refresh_id: str | None = None,
+    ) -> dict:
+        payload = await super().get_unified_account_snapshot(
+            history_window_days=history_window_days,
+            income_limit=income_limit,
+            interest_limit=interest_limit,
+            previous_snapshot=previous_snapshot,
+            mark_price_provider=mark_price_provider,
+            refresh_id=refresh_id,
+        )
+        payload["section_errors"] = {
+            "distribution_history": {
+                "message": "temporary network error",
+                "attempts": 3,
+                "used_fallback": True,
+                "stale": True,
+                "source": "network",
+            }
+        }
+        payload["diagnostics"]["fallback_sections"] = ["distribution_history"]
+        return payload
+
+
+@pytest.mark.asyncio
+async def test_refresh_result_includes_fallback_sections(tmp_path: Path) -> None:
+    settings = Settings(
+        _env_file=None,
+        monitor_refresh_interval_ms=999999,
+        monitor_history_window_days=3,
+        monitor_history_db_path=tmp_path / "history.db",
+    )
+    account = MonitorAccountConfig(
+        account_id="group_a.sub1",
+        child_account_id="sub1",
+        child_account_name="Sub One",
+        main_account_id="group_a",
+        main_account_name="Group A",
+        api_key="k1",
+        api_secret="s1",
+    )
+    settings.monitor_accounts = {account.account_id: account}
+    settings.monitor_main_accounts = {
+        "group_a": MainAccountConfig(main_id="group_a", name="Group A", children=(account,)),
+    }
+    controller = AccountMonitorController(settings, gateway_factory=lambda selected: FallbackGateway(selected))
+    try:
+        refreshed = await controller.refresh_now()
+    finally:
+        await controller.close()
+
+    assert refreshed["refresh_result"]["success"] is True
+    assert refreshed["refresh_result"]["refresh_id"]
+    assert refreshed["refresh_result"]["failed_accounts"] == []
+    assert refreshed["refresh_result"]["fallback_sections"] == [
+        {"account_id": "group_a.sub1", "sections": ["distribution_history"]}
+    ]
 
 
 class TimeoutAfterFirstGateway(FakeMonitorGateway):
@@ -305,6 +386,7 @@ class TimeoutAfterFirstGateway(FakeMonitorGateway):
         interest_limit: int = 100,
         previous_snapshot: dict | None = None,
         mark_price_provider=None,
+        refresh_id: str | None = None,
     ) -> dict:
         count = TimeoutAfterFirstGateway.call_counts.get(self.account.account_id, 0) + 1
         TimeoutAfterFirstGateway.call_counts[self.account.account_id] = count
@@ -316,6 +398,7 @@ class TimeoutAfterFirstGateway(FakeMonitorGateway):
             interest_limit=interest_limit,
             previous_snapshot=previous_snapshot,
             mark_price_provider=mark_price_provider,
+            refresh_id=refresh_id,
         )
 
 

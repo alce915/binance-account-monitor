@@ -5,8 +5,10 @@ import hashlib
 import hmac
 import json
 import logging
+import random
 from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
+from time import perf_counter
 from typing import Any, Awaitable, Callable
 from urllib.parse import urlencode
 
@@ -23,10 +25,22 @@ class MonitorGatewayError(RuntimeError):
 
 
 class RetriedRequestError(RuntimeError):
-    def __init__(self, message: str, *, attempts: int, cause: Exception) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        attempts: int,
+        cause: Exception,
+        source: str,
+        error_type: str,
+        status_code: int | None,
+    ) -> None:
         super().__init__(message)
         self.attempts = attempts
         self.cause = cause
+        self.source = source
+        self.error_type = error_type
+        self.status_code = status_code
 
 
 class RefreshMarkPriceProvider:
@@ -38,10 +52,10 @@ class RefreshMarkPriceProvider:
         self,
         symbols: list[str],
         fetcher: Callable[[], Awaitable[dict[str, Decimal]]],
-    ) -> dict[str, Decimal]:
+    ) -> tuple[dict[str, Decimal], Exception | None]:
         normalized_symbols = sorted({symbol for symbol in symbols if symbol})
         if not normalized_symbols:
-            return {}
+            return {}, None
 
         async with self._lock:
             if self._task is None:
@@ -50,9 +64,9 @@ class RefreshMarkPriceProvider:
 
         try:
             prices = await task
-        except Exception:
-            return {}
-        return {symbol: price for symbol, price in prices.items() if symbol in normalized_symbols}
+        except Exception as exc:
+            return {}, exc
+        return {symbol: price for symbol, price in prices.items() if symbol in normalized_symbols}, None
 
 
 EXCLUDED_INCOME_TYPE_KEYWORDS = ("TRANSFER",)
@@ -177,6 +191,7 @@ class BinanceMonitorGateway:
         interest_limit: int = 100,
         previous_snapshot: dict[str, Any] | None = None,
         mark_price_provider: RefreshMarkPriceProvider | None = None,
+        refresh_id: str | None = None,
     ) -> dict[str, Any]:
         if not self._account.api_key or not self._account.api_secret:
             raise MonitorGatewayError("Binance API credentials are not configured")
@@ -184,37 +199,46 @@ class BinanceMonitorGateway:
         bounded_window_days = max(1, min(history_window_days, 30))
         now = datetime.now(UTC)
         end_time = int(now.timestamp() * 1000)
+        snapshot_started_at = perf_counter()
+        timings: dict[str, int] = {}
 
         try:
+            core_started_at = perf_counter()
             account_payload, um_account_payload = await asyncio.gather(
-                self._signed_request_with_retry("/papi/v1/account", is_core=True),
-                self._signed_request_with_retry("/papi/v1/um/account", is_core=True),
+                self._signed_request_with_retry("/papi/v1/account", is_core=True, label="unified account"),
+                self._signed_request_with_retry("/papi/v1/um/account", is_core=True, label="unified um account"),
             )
+            timings["core_ms"] = int((perf_counter() - core_started_at) * 1000)
         except RetriedRequestError as exc:
             raise MonitorGatewayError(f"Failed to fetch unified account snapshot: {exc}") from exc
 
         positions = self._parse_positions(um_account_payload.get("positions", []))
-        await self._enrich_positions_with_mark_prices(
+        mark_price_started_at = perf_counter()
+        mark_price_result = await self._enrich_positions_with_mark_prices(
             positions,
             end_time_ms=end_time,
             previous_snapshot=previous_snapshot,
             mark_price_provider=mark_price_provider,
+            refresh_id=refresh_id,
         )
+        timings["mark_prices_ms"] = int((perf_counter() - mark_price_started_at) * 1000)
 
-        cached_income_summary = await self._history_store.summarize_income(
-            self._account.account_id,
-            bounded_window_days,
+        cached_income_summary, income_cache_error = await self._load_cached_income_summary(
+            history_window_days=bounded_window_days,
+            previous_snapshot=previous_snapshot,
         )
-        cached_income_summary["total_commission"] = self._extract_commission_total(cached_income_summary)
         income_task = self._ensure_income_refresh_task(
             history_window_days=bounded_window_days,
             income_limit=income_limit,
             end_time=end_time,
+            refresh_id=refresh_id,
         )
         distribution_task = asyncio.create_task(
             self._refresh_distribution_summary(
                 income_limit=income_limit,
                 end_time=end_time,
+                previous_snapshot=previous_snapshot,
+                refresh_id=refresh_id,
             )
         )
         spot_task = asyncio.create_task(
@@ -224,20 +248,28 @@ class BinanceMonitorGateway:
                 label="spot account",
             )
         )
-        distribution_summary, distribution_error = await distribution_task
-        spot_account_payload, spot_error = await spot_task
+        secondary_started_at = perf_counter()
+        (distribution_summary, distribution_error), (spot_account_payload, spot_error) = await asyncio.gather(
+            distribution_task,
+            spot_task,
+        )
         income_summary, income_error = await self._resolve_income_summary(
             cached_income_summary=cached_income_summary,
             income_task=income_task,
             history_window_days=bounded_window_days,
+            previous_snapshot=previous_snapshot,
         )
+        timings["secondary_ms"] = int((perf_counter() - secondary_started_at) * 1000)
 
         await self._ensure_distribution_backfill(backfill_limit=income_limit)
         interest_summary = self._compat_interest_summary(previous_snapshot, bounded_window_days)
-        distribution_profit_summary = await self._build_distribution_profit_summary(
+        distribution_profit_started_at = perf_counter()
+        distribution_profit_summary, profit_summary_error = await self._build_distribution_profit_summary(
             equity=Decimal(account_payload.get("accountEquity") or "0"),
             now=now,
+            previous_snapshot=previous_snapshot,
         )
+        timings["profit_summary_ms"] = int((perf_counter() - distribution_profit_started_at) * 1000)
         previous_spot_balances = self._extract_previous_spot_balances(previous_snapshot)
         if spot_account_payload is not None:
             spot_balances = self._parse_spot_balances(spot_account_payload)
@@ -250,6 +282,9 @@ class BinanceMonitorGateway:
             unrealized_pnl = sum((entry["cross_unrealized_pnl"] for entry in assets), Decimal("0"))
 
         section_errors: dict[str, Any] = {}
+        fallback_sections: list[str] = []
+        if income_cache_error is not None:
+            section_errors["income_history_cache"] = income_cache_error
         if income_error is not None:
             section_errors["income_history"] = self._build_section_error(
                 income_error,
@@ -268,8 +303,34 @@ class BinanceMonitorGateway:
                 used_fallback=bool(previous_spot_balances),
                 stale=bool(previous_spot_balances),
             )
+        if mark_price_result["error"] is not None:
+            section_errors["mark_prices"] = self._build_section_error(
+                mark_price_result["error"],
+                used_fallback=bool(mark_price_result["used_fallback"]),
+                stale=bool(mark_price_result["used_fallback"]),
+            )
+        if profit_summary_error is not None:
+            section_errors["distribution_profit_summary"] = self._build_section_error(
+                profit_summary_error,
+                used_fallback=bool(distribution_profit_summary.get("backfill_complete") or distribution_profit_summary.get("all", {}).get("amount")),
+                stale=True,
+            )
+        for section_name, details in section_errors.items():
+            if bool(details.get("used_fallback")):
+                fallback_sections.append(section_name)
 
         equity = Decimal(account_payload.get("accountEquity") or "0")
+        timings["total_ms"] = int((perf_counter() - snapshot_started_at) * 1000)
+        logger.info(
+            "Account snapshot refresh_id=%s account_id=%s total_ms=%s core_ms=%s secondary_ms=%s fallback_sections=%s section_errors=%s",
+            refresh_id or "-",
+            self._account.account_id,
+            timings["total_ms"],
+            timings.get("core_ms", 0),
+            timings.get("secondary_ms", 0),
+            fallback_sections,
+            sorted(section_errors.keys()),
+        )
         return {
             "status": "ok",
             "source": "papi",
@@ -307,6 +368,12 @@ class BinanceMonitorGateway:
             "distribution_profit_summary": distribution_profit_summary,
             "interest_summary": interest_summary,
             "section_errors": section_errors,
+            "diagnostics": {
+                "refresh_id": refresh_id,
+                "timings": timings,
+                "fallback_sections": fallback_sections,
+                "history_cache_hit": bool(cached_income_summary.get("records")) and income_error is None,
+            },
         }
 
     async def _refresh_distribution_summary(
@@ -314,12 +381,30 @@ class BinanceMonitorGateway:
         *,
         income_limit: int,
         end_time: int,
+        previous_snapshot: dict[str, Any] | None = None,
+        refresh_id: str | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any] | None]:
         distribution_error = await self._refresh_distribution_history(income_limit, end_time)
-        distribution_summary = await self._history_store.summarize_distribution(
-            self._account.account_id,
-            DISTRIBUTION_WINDOW_DAYS,
-        )
+        try:
+            distribution_summary = await self._history_store.summarize_distribution(
+                self._account.account_id,
+                DISTRIBUTION_WINDOW_DAYS,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Distribution summary load failed refresh_id=%s account_id=%s error=%s",
+                refresh_id or "-",
+                self._account.account_id,
+                exc,
+            )
+            distribution_summary = self._compat_distribution_summary(previous_snapshot)
+            distribution_error = self._history_error(
+                HISTORY_SOURCE_DISTRIBUTION,
+                exc,
+                message="Failed to load distribution summary from local history",
+            )
+        if distribution_error is not None and not int(distribution_summary.get("records") or 0):
+            distribution_summary = self._compat_distribution_summary(previous_snapshot)
         return distribution_summary, distribution_error
 
     async def _refresh_income_summary(
@@ -340,10 +425,11 @@ class BinanceMonitorGateway:
         history_window_days: int,
         income_limit: int,
         end_time: int,
+        refresh_id: str | None = None,
     ) -> asyncio.Task[dict[str, Any] | None]:
         if self._income_refresh_task is None or self._income_refresh_task.done():
             self._income_refresh_task = asyncio.create_task(
-                self._refresh_income_history(history_window_days, income_limit, end_time)
+                self._refresh_income_history(history_window_days, income_limit, end_time, refresh_id=refresh_id)
             )
             self._income_refresh_task.add_done_callback(self._clear_income_refresh_task)
         return self._income_refresh_task
@@ -358,11 +444,20 @@ class BinanceMonitorGateway:
         cached_income_summary: dict[str, Any],
         income_task: asyncio.Task[dict[str, Any] | None],
         history_window_days: int,
+        previous_snapshot: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any] | None]:
         if income_task.done() or not int(cached_income_summary.get("records") or 0):
             income_error = await income_task
-            income_summary = await self._history_store.summarize_income(self._account.account_id, history_window_days)
-            income_summary["total_commission"] = self._extract_commission_total(income_summary)
+            try:
+                income_summary = await self._history_store.summarize_income(self._account.account_id, history_window_days)
+                income_summary["total_commission"] = self._extract_commission_total(income_summary)
+            except Exception as exc:
+                income_summary = self._compat_income_summary(previous_snapshot, history_window_days)
+                income_error = self._history_error(
+                    HISTORY_SOURCE_INCOME,
+                    exc,
+                    message="Failed to load income summary from local history",
+                )
             return income_summary, income_error
         return cached_income_summary, None
 
@@ -371,40 +466,57 @@ class BinanceMonitorGateway:
         *,
         equity: Decimal,
         now: datetime,
-    ) -> dict[str, Any]:
-        period_starts = self._distribution_period_starts(now)
-        distribution_periods = await self._history_store.summarize_distribution_periods(
-            self._account.account_id,
-            period_starts,
-        )
-        earliest_event_time_ms = distribution_periods.get("earliest_event_time_ms")
-        amounts = distribution_periods.get("amounts") or {}
-        backfill_complete = await self._history_store.is_distribution_backfill_complete(self._account.account_id)
-
-        summary: dict[str, Any] = {}
-        for key, label in (
-            ("today", "今日收益丨收益率"),
-            ("week", "本周收益丨收益率"),
-            ("month", "本月收益丨收益率"),
-            ("year", "年度收益丨收益率"),
-            ("all", "全部收益丨收益率"),
-        ):
-            amount = Decimal(str(amounts.get(key) or "0"))
-            start_at = self._distribution_period_start_at(key, period_starts, earliest_event_time_ms)
-            summary[key] = {
-                "label": label,
-                "amount": amount,
-                "rate": self._calculate_ratio(amount, equity),
-                "start_at": start_at,
-                "complete": self._distribution_period_complete(
-                    key,
-                    period_starts.get(key),
-                    earliest_event_time_ms,
-                    backfill_complete,
+        previous_snapshot: dict[str, Any] | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        try:
+            period_starts = self._distribution_period_starts(now)
+            distribution_periods, backfill_complete = await asyncio.gather(
+                self._history_store.summarize_distribution_periods(
+                    self._account.account_id,
+                    period_starts,
                 ),
-            }
-        summary["backfill_complete"] = backfill_complete
-        return summary
+                self._history_store.is_distribution_backfill_complete(self._account.account_id),
+            )
+            earliest_event_time_ms = distribution_periods.get("earliest_event_time_ms")
+            amounts = distribution_periods.get("amounts") or {}
+
+            summary: dict[str, Any] = {}
+            for key, label in (
+                ("today", "今日收益丨收益率"),
+                ("week", "本周收益丨收益率"),
+                ("month", "本月收益丨收益率"),
+                ("year", "年度收益丨收益率"),
+                ("all", "全部收益丨收益率"),
+            ):
+                amount = Decimal(str(amounts.get(key) or "0"))
+                start_at = self._distribution_period_start_at(key, period_starts, earliest_event_time_ms)
+                summary[key] = {
+                    "label": label,
+                    "amount": amount,
+                    "rate": self._calculate_ratio(amount, equity),
+                    "start_at": start_at,
+                    "complete": self._distribution_period_complete(
+                        key,
+                        period_starts.get(key),
+                        earliest_event_time_ms,
+                        backfill_complete,
+                    ),
+                }
+            summary["backfill_complete"] = backfill_complete
+            return summary, None
+        except Exception as exc:
+            fallback = self._previous_section_summary(previous_snapshot, "distribution_profit_summary")
+            if isinstance(fallback, dict):
+                return fallback, self._history_error(
+                    "distribution_profit_summary",
+                    exc,
+                    message="Failed to build distribution profit summary from local history",
+                )
+            return self._empty_distribution_profit_summary(), self._history_error(
+                "distribution_profit_summary",
+                exc,
+                message="Failed to build distribution profit summary from local history",
+            )
 
     async def _ensure_distribution_backfill(self, *, backfill_limit: int) -> None:
         if self._distribution_backfill_task is not None and not self._distribution_backfill_task.done():
@@ -448,6 +560,12 @@ class BinanceMonitorGateway:
                     label="distribution backfill",
                 )
                 if payload is None:
+                    await self._history_store.record_source_failure(
+                        self._account.account_id,
+                        "distribution_backfill",
+                        error_summary=str(error.get("message") or "unknown backfill error"),
+                        failed_at_ms=query_end_time,
+                    )
                     logger.warning(
                         "Distribution backfill failed for %s in window %s-%s: %s",
                         self._account.account_id,
@@ -469,6 +587,12 @@ class BinanceMonitorGateway:
                             completed=True,
                             updated_at_ms=query_end_time,
                         )
+                        await self._history_store.record_source_success(
+                            self._account.account_id,
+                            "distribution_backfill",
+                            last_successful_end_time=query_end_time,
+                            success_at_ms=query_end_time,
+                        )
                         return
                     logger.info(
                         "Distribution backfill found no rows for %s in window %s-%s, stepping earlier",
@@ -479,13 +603,19 @@ class BinanceMonitorGateway:
                     pending_end_time_ms = query_start_time - 1
                     continue
                 oldest_event_time_ms = min(event.event_time_ms for event in events)
-                await self._history_store.record_history_batch(
+                batch_stats = await self._history_store.record_history_batch(
                     self._account.account_id,
                     HISTORY_SOURCE_DISTRIBUTION,
                     events,
                     last_successful_end_time=None,
                     retain_after_ms=None,
                     update_fetch_state=False,
+                )
+                await self._history_store.record_source_success(
+                    self._account.account_id,
+                    "distribution_backfill",
+                    last_successful_end_time=query_end_time,
+                    success_at_ms=query_end_time,
                 )
                 if oldest_event_time_ms >= earliest_event_time_ms:
                     logger.info(
@@ -498,11 +628,18 @@ class BinanceMonitorGateway:
                         completed=True,
                         updated_at_ms=query_end_time,
                     )
+                    await self._history_store.record_source_success(
+                        self._account.account_id,
+                        "distribution_backfill",
+                        last_successful_end_time=query_end_time,
+                        success_at_ms=query_end_time,
+                    )
                     return
                 logger.info(
-                    "Distribution backfill stored %s older rows for %s, next earliest %s",
-                    len(events),
+                    "Distribution backfill stored %s older rows for %s, trimmed=%s next earliest %s",
+                    batch_stats.get("inserted_count", len(events)),
                     self._account.account_id,
+                    batch_stats.get("trimmed_count", 0),
                     oldest_event_time_ms,
                 )
                 if oldest_event_time_ms <= 0:
@@ -511,8 +648,21 @@ class BinanceMonitorGateway:
                         completed=True,
                         updated_at_ms=query_end_time,
                     )
+                    await self._history_store.record_source_success(
+                        self._account.account_id,
+                        "distribution_backfill",
+                        last_successful_end_time=query_end_time,
+                        success_at_ms=query_end_time,
+                    )
                     return
                 pending_end_time_ms = oldest_event_time_ms - 1
+        except Exception as exc:
+            await self._history_store.record_source_failure(
+                self._account.account_id,
+                "distribution_backfill",
+                error_summary=str(exc),
+            )
+            logger.exception("Distribution backfill crashed for %s", self._account.account_id)
         finally:
             self._distribution_backfill_task = None
 
@@ -539,6 +689,21 @@ class BinanceMonitorGateway:
             "by_asset": {},
         }
 
+    def _compat_distribution_summary(
+        self,
+        previous_snapshot: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        summary = self._previous_section_summary(previous_snapshot, "distribution_summary")
+        if summary is not None:
+            return summary
+        return {
+            "window_days": DISTRIBUTION_WINDOW_DAYS,
+            "records": 0,
+            "total_distribution": Decimal("0"),
+            "by_type": {},
+            "by_asset": {},
+        }
+
     def _compat_interest_summary(
         self,
         previous_snapshot: dict[str, Any] | None,
@@ -555,62 +720,158 @@ class BinanceMonitorGateway:
             "total_interest": Decimal("0"),
         }
 
+    async def _load_cached_income_summary(
+        self,
+        *,
+        history_window_days: int,
+        previous_snapshot: dict[str, Any] | None,
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        try:
+            cached_income_summary = await self._history_store.summarize_income(
+                self._account.account_id,
+                history_window_days,
+            )
+            cached_income_summary["total_commission"] = self._extract_commission_total(cached_income_summary)
+            return cached_income_summary, None
+        except Exception as exc:
+            logger.warning(
+                "Income summary cache load failed account_id=%s error=%s",
+                self._account.account_id,
+                exc,
+            )
+            return self._compat_income_summary(previous_snapshot, history_window_days), self._build_section_error(
+                self._history_error(
+                    HISTORY_SOURCE_INCOME,
+                    exc,
+                    message="Failed to load cached income summary",
+                ),
+                used_fallback=bool(previous_snapshot),
+                stale=bool(previous_snapshot),
+            )
+
     async def _refresh_income_history(
         self,
         history_window_days: int,
         income_limit: int,
         end_time: int,
+        *,
+        refresh_id: str | None = None,
     ) -> dict[str, Any] | None:
-        start_time = await self._history_start_time(
-            HISTORY_SOURCE_INCOME,
-            history_window_days=history_window_days,
-            end_time=end_time,
-        )
-        payload, error = await self._optional_request_with_retry(
-            "/papi/v1/um/income",
-            {"startTime": start_time, "endTime": end_time, "limit": income_limit},
-            label="income history",
-        )
-        if payload is None:
-            return error
+        try:
+            start_time = await self._history_start_time(
+                HISTORY_SOURCE_INCOME,
+                history_window_days=history_window_days,
+                end_time=end_time,
+            )
+            payload, error = await self._optional_request_with_retry(
+                "/papi/v1/um/income",
+                {"startTime": start_time, "endTime": end_time, "limit": income_limit},
+                label="income history",
+            )
+            if payload is None:
+                await self._history_store.record_source_failure(
+                    self._account.account_id,
+                    HISTORY_SOURCE_INCOME,
+                    error_summary=str(error.get("message") or "income refresh failed"),
+                    failed_at_ms=end_time,
+                )
+                return error
 
-        events = self._build_income_events(payload, default_event_time_ms=end_time)
-        await self._history_store.record_history_batch(
-            self._account.account_id,
-            HISTORY_SOURCE_INCOME,
-            events,
-            last_successful_end_time=end_time,
-            retain_after_ms=self._retention_start_ms(history_window_days),
-        )
-        return None
+            events = self._build_income_events(payload, default_event_time_ms=end_time)
+            batch_stats = await self._history_store.record_history_batch(
+                self._account.account_id,
+                HISTORY_SOURCE_INCOME,
+                events,
+                last_successful_end_time=end_time,
+                retain_after_ms=self._retention_start_ms(history_window_days),
+            )
+            await self._history_store.record_source_success(
+                self._account.account_id,
+                HISTORY_SOURCE_INCOME,
+                last_successful_end_time=end_time,
+                success_at_ms=end_time,
+            )
+            logger.info(
+                "Income history refreshed refresh_id=%s account_id=%s inserted=%s trimmed=%s records=%s",
+                refresh_id or "-",
+                self._account.account_id,
+                batch_stats.get("inserted_count", 0),
+                batch_stats.get("trimmed_count", 0),
+                len(events),
+            )
+            return None
+        except Exception as exc:
+            await self._history_store.record_source_failure(
+                self._account.account_id,
+                HISTORY_SOURCE_INCOME,
+                error_summary=str(exc),
+                failed_at_ms=end_time,
+            )
+            return self._history_error(
+                HISTORY_SOURCE_INCOME,
+                exc,
+                message="Failed to refresh income history",
+            )
 
     async def _refresh_distribution_history(
         self,
         income_limit: int,
         end_time: int,
     ) -> dict[str, Any] | None:
-        start_time = await self._history_start_time(
-            HISTORY_SOURCE_DISTRIBUTION,
-            history_window_days=DISTRIBUTION_WINDOW_DAYS,
-            end_time=end_time,
-        )
-        payload, error = await self._optional_request_sapi_with_retry(
-            "/sapi/v1/asset/assetDividend",
-            {"startTime": start_time, "endTime": end_time, "limit": income_limit},
-            label="distribution history",
-        )
-        if payload is None:
-            return error
+        try:
+            start_time = await self._history_start_time(
+                HISTORY_SOURCE_DISTRIBUTION,
+                history_window_days=DISTRIBUTION_WINDOW_DAYS,
+                end_time=end_time,
+            )
+            payload, error = await self._optional_request_sapi_with_retry(
+                "/sapi/v1/asset/assetDividend",
+                {"startTime": start_time, "endTime": end_time, "limit": income_limit},
+                label="distribution history",
+            )
+            if payload is None:
+                await self._history_store.record_source_failure(
+                    self._account.account_id,
+                    HISTORY_SOURCE_DISTRIBUTION,
+                    error_summary=str(error.get("message") or "distribution refresh failed"),
+                    failed_at_ms=end_time,
+                )
+                return error
 
-        events = self._build_distribution_events(payload, default_event_time_ms=end_time)
-        await self._history_store.record_history_batch(
-            self._account.account_id,
-            HISTORY_SOURCE_DISTRIBUTION,
-            events,
-            last_successful_end_time=end_time,
-            retain_after_ms=None,
-        )
-        return None
+            events = self._build_distribution_events(payload, default_event_time_ms=end_time)
+            batch_stats = await self._history_store.record_history_batch(
+                self._account.account_id,
+                HISTORY_SOURCE_DISTRIBUTION,
+                events,
+                last_successful_end_time=end_time,
+                retain_after_ms=None,
+            )
+            await self._history_store.record_source_success(
+                self._account.account_id,
+                HISTORY_SOURCE_DISTRIBUTION,
+                last_successful_end_time=end_time,
+                success_at_ms=end_time,
+            )
+            logger.info(
+                "Distribution history refreshed account_id=%s inserted=%s trimmed=%s records=%s",
+                self._account.account_id,
+                batch_stats.get("inserted_count", 0),
+                batch_stats.get("trimmed_count", 0),
+                len(events),
+            )
+            return None
+        except Exception as exc:
+            await self._history_store.record_source_failure(
+                self._account.account_id,
+                HISTORY_SOURCE_DISTRIBUTION,
+                error_summary=str(exc),
+                failed_at_ms=end_time,
+            )
+            return self._history_error(
+                HISTORY_SOURCE_DISTRIBUTION,
+                exc,
+                message="Failed to refresh distribution history",
+            )
 
     async def _refresh_interest_source(
         self,
@@ -663,13 +924,15 @@ class BinanceMonitorGateway:
         params: dict[str, Any] | None = None,
         *,
         is_core: bool,
+        label: str | None = None,
     ) -> Any:
         timeout_s, max_attempts, retry_delays = self._retry_budget(is_core=is_core)
         return await self._request_with_retry(
-            label=path,
+            label=label or path,
             operation=lambda: self._signed_request(path, params, timeout_s=timeout_s),
             max_attempts=max_attempts,
             retry_delays=retry_delays,
+            timeout_s=timeout_s,
         )
 
     async def _signed_request_sapi_with_retry(
@@ -678,13 +941,15 @@ class BinanceMonitorGateway:
         params: dict[str, Any] | None = None,
         *,
         is_core: bool = False,
+        label: str | None = None,
     ) -> Any:
         timeout_s, max_attempts, retry_delays = self._retry_budget(is_core=is_core)
         return await self._request_with_retry(
-            label=path,
+            label=label or path,
             operation=lambda: self._signed_request_sapi(path, params, timeout_s=timeout_s),
             max_attempts=max_attempts,
             retry_delays=retry_delays,
+            timeout_s=timeout_s,
         )
 
     async def _public_request_market_with_retry(self, path: str, params: dict[str, Any] | None = None) -> Any:
@@ -694,6 +959,7 @@ class BinanceMonitorGateway:
             operation=lambda: self._public_request_market(path, params, timeout_s=timeout_s),
             max_attempts=max_attempts,
             retry_delays=retry_delays,
+            timeout_s=timeout_s,
         )
 
     async def _optional_request_with_retry(
@@ -704,10 +970,10 @@ class BinanceMonitorGateway:
         label: str,
     ) -> tuple[Any, dict[str, Any] | None]:
         try:
-            payload = await self._signed_request_with_retry(path, params, is_core=False)
+            payload = await self._signed_request_with_retry(path, params, is_core=False, label=label)
             return payload, None
         except RetriedRequestError as exc:
-            return None, {"message": str(exc), "attempts": exc.attempts}
+            return None, self._retry_error_payload(exc)
 
     async def _optional_request_sapi_with_retry(
         self,
@@ -717,10 +983,10 @@ class BinanceMonitorGateway:
         label: str,
     ) -> tuple[Any, dict[str, Any] | None]:
         try:
-            payload = await self._signed_request_sapi_with_retry(path, params, is_core=False)
+            payload = await self._signed_request_sapi_with_retry(path, params, is_core=False, label=label)
             return payload, None
         except RetriedRequestError as exc:
-            return None, {"message": str(exc), "attempts": exc.attempts}
+            return None, self._retry_error_payload(exc)
 
     async def _request_with_retry(
         self,
@@ -729,6 +995,7 @@ class BinanceMonitorGateway:
         operation: Callable[[], Awaitable[Any]],
         max_attempts: int,
         retry_delays: tuple[float, ...],
+        timeout_s: float,
     ) -> Any:
         last_error: Exception | None = None
 
@@ -737,23 +1004,67 @@ class BinanceMonitorGateway:
                 return await operation()
             except Exception as exc:
                 last_error = exc
+                source, error_type, status_code = self._classify_error(exc)
                 should_retry = attempt < max_attempts and self._is_retryable_error(exc)
+                logger.warning(
+                    "Binance request failure account_id=%s label=%s attempt=%s/%s timeout_s=%s source=%s error_type=%s status_code=%s retry=%s error=%s",
+                    self._account.account_id,
+                    label,
+                    attempt,
+                    max_attempts,
+                    timeout_s,
+                    source,
+                    error_type,
+                    status_code,
+                    should_retry,
+                    exc,
+                )
                 if not should_retry:
                     raise RetriedRequestError(
                         f"{label} failed after {attempt} attempts: {exc}",
                         attempts=attempt,
                         cause=exc,
+                        source=source,
+                        error_type=error_type,
+                        status_code=status_code,
                     ) from exc
-                delay = retry_delays[min(attempt - 1, len(retry_delays) - 1)] if retry_delays else 0
+                base_delay = retry_delays[min(attempt - 1, len(retry_delays) - 1)] if retry_delays else 0
+                delay = base_delay * (1 + random.uniform(0.0, 0.15))
                 if delay > 0:
                     await asyncio.sleep(delay)
 
         assert last_error is not None
+        source, error_type, status_code = self._classify_error(last_error)
         raise RetriedRequestError(
             f"{label} failed after {max_attempts} attempts: {last_error}",
             attempts=max_attempts,
             cause=last_error,
+            source=source,
+            error_type=error_type,
+            status_code=status_code,
         ) from last_error
+
+    def _retry_error_payload(self, exc: RetriedRequestError) -> dict[str, Any]:
+        return {
+            "message": str(exc),
+            "attempts": exc.attempts,
+            "source": exc.source,
+            "error_type": exc.error_type,
+            "status_code": exc.status_code,
+        }
+
+    def _classify_error(self, exc: Exception) -> tuple[str, str, int | None]:
+        if isinstance(exc, httpx.TimeoutException):
+            return "network", exc.__class__.__name__, None
+        if isinstance(exc, httpx.NetworkError):
+            return "network", exc.__class__.__name__, None
+        if isinstance(exc, httpx.HTTPStatusError):
+            status_code = exc.response.status_code
+            source = "network" if status_code in {408, 409, 429, 500, 502, 503, 504} else "binance"
+            return source, exc.__class__.__name__, status_code
+        if isinstance(exc, MonitorGatewayError):
+            return "local_cache", exc.__class__.__name__, None
+        return "binance", exc.__class__.__name__, None
 
     def _is_retryable_error(self, exc: Exception) -> bool:
         if isinstance(exc, (httpx.TimeoutException, httpx.NetworkError)):
@@ -806,23 +1117,54 @@ class BinanceMonitorGateway:
         end_time_ms: int,
         previous_snapshot: dict[str, Any] | None,
         mark_price_provider: RefreshMarkPriceProvider | None,
-    ) -> None:
+        refresh_id: str | None = None,
+    ) -> dict[str, Any]:
         symbols = sorted({str(position.get("symbol") or "") for position in positions if position.get("symbol")})
         if not symbols:
-            return
+            return {"error": None, "used_fallback": False}
 
         provider = mark_price_provider or RefreshMarkPriceProvider()
-        current_prices = await provider.get_mark_prices(symbols, self._fetch_all_mark_prices)
+        current_prices, request_error = await provider.get_mark_prices(symbols, self._fetch_all_mark_prices)
         if current_prices:
-            await self._history_store.save_mark_prices(current_prices, updated_at_ms=end_time_ms)
-        stored_prices = await self._history_store.get_mark_prices(symbols)
+            try:
+                await self._history_store.save_mark_prices(current_prices, updated_at_ms=end_time_ms)
+            except Exception as exc:
+                logger.warning(
+                    "Mark price cache save failed refresh_id=%s account_id=%s error=%s",
+                    refresh_id or "-",
+                    self._account.account_id,
+                    exc,
+                )
+        try:
+            stored_prices = await self._history_store.get_mark_prices(symbols)
+        except Exception as exc:
+            logger.warning(
+                "Mark price cache load failed refresh_id=%s account_id=%s error=%s",
+                refresh_id or "-",
+                self._account.account_id,
+                exc,
+            )
+            stored_prices = {}
         previous_prices = self._extract_previous_mark_prices(previous_snapshot)
+        used_fallback = False
 
         for position in positions:
             symbol = str(position.get("symbol") or "")
             mark_price = current_prices.get(symbol) or stored_prices.get(symbol) or previous_prices.get(symbol)
             if mark_price is not None and mark_price > Decimal("0"):
                 position["mark_price"] = mark_price
+                if symbol not in current_prices:
+                    used_fallback = True
+        return {
+            "error": self._classify_generic_error(
+                request_error,
+                message=f"mark prices failed: {request_error}",
+                source="network",
+            )
+            if request_error is not None
+            else None,
+            "used_fallback": used_fallback,
+        }
 
     async def _fetch_all_mark_prices(self) -> dict[str, Decimal]:
         payload = await self._public_request_market_with_retry("/fapi/v1/premiumIndex")
@@ -855,6 +1197,25 @@ class BinanceMonitorGateway:
             if price > Decimal("0"):
                 prices[symbol] = price
         return prices
+
+    def _empty_distribution_profit_summary(self) -> dict[str, Any]:
+        def _period(label: str) -> dict[str, Any]:
+            return {
+                "label": label,
+                "amount": Decimal("0"),
+                "rate": Decimal("0"),
+                "start_at": None,
+                "complete": False,
+            }
+
+        return {
+            "today": _period("今日收益丨收益率"),
+            "week": _period("本周收益丨收益率"),
+            "month": _period("本月收益丨收益率"),
+            "year": _period("年度收益丨收益率"),
+            "all": _period("全部收益丨收益率"),
+            "backfill_complete": False,
+        }
 
     def _parse_assets(
         self,
@@ -1138,6 +1499,38 @@ class BinanceMonitorGateway:
                 return [item for item in data if isinstance(item, dict)]
         return []
 
+    def _history_error(
+        self,
+        source_name: str,
+        exc: Exception,
+        *,
+        message: str,
+    ) -> dict[str, Any]:
+        return {
+            "message": f"{message}: {exc}",
+            "attempts": 1,
+            "source": "history",
+            "error_type": exc.__class__.__name__,
+            "status_code": None,
+            "history_source": source_name,
+        }
+
+    def _classify_generic_error(
+        self,
+        exc: Exception,
+        *,
+        message: str,
+        source: str | None = None,
+    ) -> dict[str, Any]:
+        inferred_source, error_type, status_code = self._classify_error(exc)
+        return {
+            "message": message,
+            "attempts": 1,
+            "source": source or inferred_source,
+            "error_type": error_type,
+            "status_code": status_code,
+        }
+
     def _build_section_error(
         self,
         error: dict[str, Any],
@@ -1150,4 +1543,7 @@ class BinanceMonitorGateway:
             "attempts": int(error.get("attempts") or 1),
             "used_fallback": used_fallback,
             "stale": stale,
+            "source": str(error.get("source") or "binance"),
+            "error_type": error.get("error_type"),
+            "status_code": error.get("status_code"),
         }

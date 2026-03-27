@@ -5,7 +5,45 @@ $localPyVenvConfig = Join-Path $projectRoot '.venv\pyvenv.cfg'
 $localVenvPython = Join-Path $projectRoot '.venv\Scripts\python.exe'
 $parentVenvPython = Join-Path (Split-Path $projectRoot -Parent) '.venv\Scripts\python.exe'
 $envFile = Join-Path $projectRoot '.env'
+$envExampleFile = Join-Path $projectRoot '.env.example'
+$accountsFile = Join-Path $projectRoot 'config\binance_monitor_accounts.json'
+$accountsExampleFile = Join-Path $projectRoot 'config\binance_monitor_accounts.example.json'
 $pythonExecutable = $null
+$bootstrapMessages = [System.Collections.Generic.List[string]]::new()
+
+function Test-PlaceholderCredentials {
+    param([string]$Path)
+
+    if (-not (Test-Path $Path)) {
+        return $false
+    }
+
+    $content = Get-Content -Raw -Path $Path -ErrorAction SilentlyContinue
+    if (-not $content) {
+        return $false
+    }
+
+    return $content -match 'replace-with-api-(key|secret)-' -or $content -match '"api_(key|secret)"\s*:\s*""'
+}
+
+if (-not (Test-Path $envFile) -and (Test-Path $envExampleFile)) {
+    Copy-Item -Path $envExampleFile -Destination $envFile
+    $bootstrapMessages.Add("Created .env from .env.example")
+}
+
+if (-not (Test-Path $accountsFile) -and (Test-Path $accountsExampleFile)) {
+    Copy-Item -Path $accountsExampleFile -Destination $accountsFile
+    $bootstrapMessages.Add("Created config\\binance_monitor_accounts.json from example template")
+}
+
+if ($bootstrapMessages.Count -gt 0) {
+    $bootstrapMessages.Add('Fill in your real Binance API credentials in config\binance_monitor_accounts.json, then run the restart script again.')
+    throw ($bootstrapMessages -join [Environment]::NewLine)
+}
+
+if (Test-PlaceholderCredentials -Path $accountsFile) {
+    throw "Placeholder Binance API credentials detected in $accountsFile. Fill in your real credentials, then run the restart script again."
+}
 
 if (Test-Path $localPyVenvConfig) {
     $homeLine = Get-Content $localPyVenvConfig | Where-Object { $_ -like 'home = *' } | Select-Object -First 1
@@ -120,4 +158,13 @@ if (-not $started) {
 }
 
 $listener = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction Stop | Select-Object -First 1
-"Monitor service restarted successfully on http://$hostAddress`:$port/ (PID=$($listener.OwningProcess))"
+$statusLines = [System.Collections.Generic.List[string]]::new()
+$statusLines.Add("Monitor service restarted successfully on http://$hostAddress`:$port/ (PID=$($listener.OwningProcess))")
+foreach ($message in $bootstrapMessages) {
+    $statusLines.Add($message)
+}
+if ($bootstrapMessages.Count -gt 0) {
+    $statusLines.Add('Fill in your real Binance API credentials before relying on live monitor data.')
+}
+
+$statusLines -join [Environment]::NewLine
