@@ -5,11 +5,17 @@ import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Query
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from monitor_app.account_monitor import AccountMonitorController
+from monitor_app.account_import import (
+    AccountImportError,
+    build_accounts_excel_template,
+    parse_accounts_excel,
+    write_monitor_accounts_payload,
+)
 from monitor_app.config import settings
 
 
@@ -68,6 +74,45 @@ async def set_monitor_control(payload: MonitorControlRequest) -> dict:
 async def refresh_monitor() -> dict:
     monitor: AccountMonitorController = app.state.monitor
     return await monitor.refresh_now()
+
+
+@app.post("/api/config/import/excel")
+async def import_monitor_accounts_excel(file: UploadFile = File(...)) -> dict:
+    filename = file.filename or "accounts.xlsx"
+    if Path(filename).suffix.lower() != ".xlsx":
+        raise HTTPException(status_code=400, detail="Only .xlsx files are supported")
+
+    try:
+        payload, import_result = parse_accounts_excel(await file.read(), filename=filename)
+        write_monitor_accounts_payload(settings.monitor_accounts_file, payload)
+        monitor: AccountMonitorController = app.state.monitor
+        await monitor.reload_accounts()
+        response = await monitor.refresh_now()
+    except AccountImportError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        await file.close()
+
+    response["import_result"] = import_result.as_dict()
+    if response.get("refresh_result", {}).get("success", False):
+        response["message"] = "Excel 导入成功，数据已刷新"
+    else:
+        response["message"] = "Excel 导入成功，但刷新失败"
+    return response
+
+
+@app.get("/api/config/import/excel-template")
+async def download_monitor_accounts_excel_template() -> Response:
+    content = build_accounts_excel_template()
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": 'attachment; filename="monitor_accounts_template.xlsx"',
+        },
+    )
 
 
 @app.get("/stream/monitor")

@@ -203,6 +203,23 @@ class AccountMonitorController:
             payload["refresh_result"]["message"] = f"刷新失败，已保留当前数据：{candidate_payload.get('message') or payload.get('message') or 'Refresh completed'}"
         return payload
 
+    async def reload_accounts(self) -> dict[str, Any]:
+        async with self._refresh_lock:
+            previous_accounts = dict(self._settings.monitor_accounts)
+            self._settings.load_monitor_accounts()
+
+            for account_id, gateway in list(self._gateways.items()):
+                next_account = self._settings.monitor_accounts.get(account_id)
+                previous_account = previous_accounts.get(account_id)
+                if next_account is None or next_account != previous_account:
+                    await gateway.close()
+                    self._gateways.pop(account_id, None)
+
+            self._last_payload = self._build_idle_payload("idle", "Monitor accounts reloaded")
+
+        await self._broadcast(self._last_payload)
+        return self.current_groups()
+
     def unsubscribe(self, queue: asyncio.Queue[dict[str, Any]]) -> None:
         self._subscriptions.pop(queue, None)
         if not self._subscriptions and self._refresh_task is not None:

@@ -45,6 +45,7 @@ scripts\restart_monitor_service.bat
 - `GET /api/monitor/summary`
 - `GET /api/monitor/groups`
 - `GET /api/monitor/accounts`
+- `POST /api/config/import/excel`
 - `GET /stream/monitor`
 
 ## 配置说明

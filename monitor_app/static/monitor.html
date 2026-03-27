@@ -92,9 +92,9 @@
 
     .hero-controls {
       display: inline-flex;
-      flex-direction: column;
-      align-items: stretch;
-      gap: 6px;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
     }
 
     .toolbar {
@@ -429,6 +429,8 @@
                 <input type="checkbox" id="monitorToggle" checked>
                 <span class="switch-track" aria-hidden="true"></span>
               </label>
+              <button class="refresh-button" id="downloadTemplateButton" type="button">下载模板</button>
+              <button class="refresh-button" id="importButton" type="button">导入 Excel</button>
             </div>
           </div>
         </div>
@@ -444,6 +446,7 @@
       <div class="toolbar-meta">
         <div class="mono" id="updatedAt">-</div>
         <button class="refresh-button" id="refreshButton" type="button">立即刷新</button>
+        <input id="importInput" type="file" accept=".xlsx" hidden>
       </div>
     </section>
 
@@ -461,13 +464,17 @@
     const updatedAt = document.getElementById('updatedAt');
     const toolbarStats = document.getElementById('toolbarStats');
     const monitorToggle = document.getElementById('monitorToggle');
+    const downloadTemplateButton = document.getElementById('downloadTemplateButton');
     const refreshButton = document.getElementById('refreshButton');
+    const importButton = document.getElementById('importButton');
+    const importInput = document.getElementById('importInput');
     const query = new URLSearchParams(window.location.search);
     const accountIds = query.get('account_ids');
     const groupsUrl = accountIds ? `/api/monitor/groups?account_ids=${encodeURIComponent(accountIds)}` : '/api/monitor/groups';
     const streamUrl = accountIds ? `/stream/monitor?account_ids=${encodeURIComponent(accountIds)}` : '/stream/monitor';
     let toggleBusy = false;
     let refreshBusy = false;
+    let importBusy = false;
     let refreshCooldownSeconds = 0;
     let refreshCooldownTimer = null;
 
@@ -566,9 +573,12 @@
       return '立即刷新';
     }
 
-    function applyRefreshButtonState() {
+    function applyActionButtonState() {
       refreshButton.textContent = refreshButtonLabel();
-      refreshButton.disabled = refreshCooldownSeconds > 0;
+      downloadTemplateButton.disabled = importBusy || refreshBusy || toggleBusy;
+      refreshButton.disabled = importBusy || refreshBusy || refreshCooldownSeconds > 0;
+      importButton.textContent = importBusy ? '导入中' : '导入 Excel';
+      importButton.disabled = importBusy || refreshBusy || toggleBusy;
     }
 
     function startRefreshCooldown(seconds = 30) {
@@ -577,26 +587,22 @@
         refreshCooldownTimer = null;
       }
       refreshCooldownSeconds = Math.max(0, Number(seconds) || 0);
-      applyRefreshButtonState();
-      if (refreshCooldownSeconds <= 0) {
-        messageText.textContent = describeRefreshResult(refreshResult, elapsedSeconds);
-        return;
-      }
+      applyActionButtonState();
       refreshCooldownTimer = window.setInterval(() => {
         refreshCooldownSeconds = Math.max(0, refreshCooldownSeconds - 1);
         if (refreshCooldownSeconds === 0 && refreshCooldownTimer !== null) {
           window.clearInterval(refreshCooldownTimer);
           refreshCooldownTimer = null;
         }
-        applyRefreshButtonState();
+        applyActionButtonState();
       }, 1000);
     }
 
     function syncMonitorToggle(payload = {}) {
       const enabled = payload.service?.monitor_enabled !== false;
       monitorToggle.checked = enabled;
-      monitorToggle.disabled = toggleBusy || refreshBusy;
-      applyRefreshButtonState();
+      monitorToggle.disabled = toggleBusy || refreshBusy || importBusy;
+      applyActionButtonState();
     }
 
     function renderToolbarStats(summary = {}) {
@@ -842,7 +848,7 @@
     async function setMonitorEnabled(enabled) {
       toggleBusy = true;
       monitorToggle.disabled = true;
-      applyRefreshButtonState();
+      applyActionButtonState();
       try {
         const response = await fetch('/api/monitor/control', {
           method: 'POST',
@@ -855,14 +861,12 @@
         const payload = await response.json();
         render(payload);
       } catch (error) {
-        messageText.textContent = `立即刷新失败：${error}`;
-        return;
         monitorToggle.checked = !enabled;
         messageText.textContent = `监控状态更新失败：${error}`;
       } finally {
         toggleBusy = false;
-        monitorToggle.disabled = refreshBusy;
-        applyRefreshButtonState();
+        monitorToggle.disabled = refreshBusy || importBusy;
+        applyActionButtonState();
       }
     }
 
@@ -875,6 +879,7 @@
       refreshBusy = true;
       const refreshStartedAt = Date.now();
       monitorToggle.disabled = true;
+      applyActionButtonState();
       messageText.textContent = '正在刷新，当前数据保持不变，等待新数据返回后自动更新';
       try {
         const response = await fetch('/api/monitor/refresh', {
@@ -899,7 +904,88 @@
         messageText.textContent = `立即刷新失败：${error}`;
       } finally {
         refreshBusy = false;
-        monitorToggle.disabled = toggleBusy;
+        monitorToggle.disabled = toggleBusy || importBusy;
+        applyActionButtonState();
+      }
+    }
+
+    function describeImportResult(payload = {}) {
+      const result = payload.import_result || {};
+      const groupCount = fmtCount(result.main_account_count || 0);
+      const accountCount = fmtCount(result.account_count || 0);
+      if (payload.refresh_result?.success === false) {
+        return `Excel 导入成功，已覆盖 ${groupCount} 个分组 / ${accountCount} 个账户，但刷新失败：${payload.refresh_result.message || '-'}`;
+      }
+      return `Excel 导入成功，已覆盖 ${groupCount} 个分组 / ${accountCount} 个账户`;
+    }
+
+    function parseDownloadFilename(contentDisposition) {
+      if (!contentDisposition) {
+        return 'monitor_accounts_template.xlsx';
+      }
+      const match = contentDisposition.match(/filename=\"?([^\";]+)\"?/i);
+      return match ? match[1] : 'monitor_accounts_template.xlsx';
+    }
+
+    async function downloadTemplate() {
+      if (importBusy || refreshBusy || toggleBusy) {
+        return;
+      }
+
+      messageText.textContent = '正在下载 Excel 模板';
+      try {
+        const response = await fetch('/api/config/import/excel-template', {
+          method: 'GET',
+          cache: 'no-store',
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        const blob = await response.blob();
+        const filename = parseDownloadFilename(response.headers.get('content-disposition'));
+        const url = window.URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = filename;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        window.URL.revokeObjectURL(url);
+        messageText.textContent = 'Excel 模板已开始下载';
+      } catch (error) {
+        messageText.textContent = `模板下载失败：${error}`;
+      }
+    }
+
+    async function uploadExcel(file) {
+      if (!file || importBusy) {
+        return;
+      }
+
+      importBusy = true;
+      monitorToggle.disabled = true;
+      applyActionButtonState();
+      messageText.textContent = '正在导入 Excel 配置，现有数据保持不变';
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+        const response = await fetch('/api/config/import/excel', {
+          method: 'POST',
+          body: formData,
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.detail || payload.message || `HTTP ${response.status}`);
+        }
+        render(payload);
+        messageText.textContent = describeImportResult(payload);
+      } catch (error) {
+        messageText.textContent = `Excel 导入失败：${error}`;
+      } finally {
+        importBusy = false;
+        importInput.value = '';
+        monitorToggle.disabled = toggleBusy || refreshBusy;
+        applyActionButtonState();
       }
     }
 
@@ -932,6 +1018,25 @@
         refreshNow();
       });
 
+      downloadTemplateButton.addEventListener('click', () => {
+        downloadTemplate();
+      });
+
+      importButton.addEventListener('click', () => {
+        if (importBusy || refreshBusy) {
+          return;
+        }
+        importInput.click();
+      });
+
+      importInput.addEventListener('change', () => {
+        const [file] = importInput.files || [];
+        if (!file) {
+          return;
+        }
+        uploadExcel(file);
+      });
+
       const source = new EventSource(streamUrl);
       source.addEventListener('monitor_snapshot', (event) => {
         render(JSON.parse(event.data));
@@ -942,7 +1047,7 @@
       };
     }
 
-    applyRefreshButtonState();
+    applyActionButtonState();
     bootstrap();
   </script>
 </body>

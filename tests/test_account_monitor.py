@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from decimal import Decimal
 from pathlib import Path
 
@@ -306,6 +307,153 @@ async def test_refresh_failure_preserves_previous_payload(tmp_path: Path) -> Non
     assert second["summary"]["success_count"] == 1
     assert "duration_ms" in second["refresh_result"]
     assert second["refresh_result"]["failed_accounts"][0]["account_id"] == "group_a.sub1"
+
+
+class TrackingGateway(FakeMonitorGateway):
+    close_calls: dict[str, int] = {}
+
+    async def close(self) -> None:
+        TrackingGateway.close_calls[self.account.account_id] = TrackingGateway.close_calls.get(self.account.account_id, 0) + 1
+
+
+@pytest.mark.asyncio
+async def test_reload_accounts_closes_removed_gateways_and_updates_service_ids(tmp_path: Path) -> None:
+    TrackingGateway.close_calls = {}
+    config_path = tmp_path / "config" / "binance_monitor_accounts.json"
+    settings = Settings(
+        _env_file=None,
+        monitor_accounts_file=config_path,
+        monitor_refresh_interval_ms=999999,
+        monitor_history_window_days=3,
+        monitor_history_db_path=tmp_path / "history.db",
+    )
+    _write_accounts_file(
+        config_path,
+        {
+            "main_accounts": [
+                {
+                    "main_id": "group_a",
+                    "name": "Group A",
+                    "children": [
+                        {"account_id": "sub1", "name": "Sub One", "api_key": "k1", "api_secret": "s1"},
+                        {"account_id": "sub2", "name": "Sub Two", "api_key": "k2", "api_secret": "s2"},
+                    ],
+                }
+            ]
+        },
+    )
+    settings.load_monitor_accounts()
+
+    def gateway_factory(account: MonitorAccountConfig) -> TrackingGateway:
+        return TrackingGateway(account)
+
+    controller = AccountMonitorController(settings, gateway_factory=gateway_factory)
+    try:
+        await controller.refresh_now()
+        first_gateway = controller._gateways["group_a.sub1"]
+        second_gateway = controller._gateways["group_a.sub2"]
+
+        _write_accounts_file(
+            config_path,
+            {
+                "main_accounts": [
+                    {
+                        "main_id": "group_a",
+                        "name": "Group A",
+                        "children": [
+                            {"account_id": "sub1", "name": "Sub One", "api_key": "k1", "api_secret": "s1"},
+                        ],
+                    },
+                    {
+                        "main_id": "group_b",
+                        "name": "Group B",
+                        "children": [
+                            {"account_id": "sub1", "name": "Sub Three", "api_key": "k3", "api_secret": "s3"},
+                        ],
+                    },
+                ]
+            },
+        )
+
+        reloaded = await controller.reload_accounts()
+        await controller.refresh_now()
+        assert reloaded["service"]["account_ids"] == ["group_a.sub1", "group_b.sub1"]
+        assert reloaded["service"]["main_account_ids"] == ["group_a", "group_b"]
+        assert controller._gateways["group_a.sub1"] is first_gateway
+        assert "group_a.sub2" not in controller._gateways
+        assert controller._gateways["group_b.sub1"].account.account_id == "group_b.sub1"
+        assert second_gateway.account.account_id == "group_a.sub2"
+        assert TrackingGateway.close_calls == {"group_a.sub2": 1}
+    finally:
+        await controller.close()
+
+
+@pytest.mark.asyncio
+async def test_reload_accounts_recreates_gateway_when_account_config_changes(tmp_path: Path) -> None:
+    TrackingGateway.close_calls = {}
+    config_path = tmp_path / "config" / "binance_monitor_accounts.json"
+    settings = Settings(
+        _env_file=None,
+        monitor_accounts_file=config_path,
+        monitor_refresh_interval_ms=999999,
+        monitor_history_window_days=3,
+        monitor_history_db_path=tmp_path / "history.db",
+    )
+    _write_accounts_file(
+        config_path,
+        {
+            "main_accounts": [
+                {
+                    "main_id": "group_a",
+                    "name": "Group A",
+                    "children": [
+                        {"account_id": "sub1", "name": "Sub One", "api_key": "k1", "api_secret": "s1"},
+                    ],
+                }
+            ]
+        },
+    )
+    settings.load_monitor_accounts()
+
+    factory_calls: list[str] = []
+
+    def gateway_factory(account: MonitorAccountConfig) -> TrackingGateway:
+        factory_calls.append(account.api_key)
+        return TrackingGateway(account)
+
+    controller = AccountMonitorController(settings, gateway_factory=gateway_factory)
+    try:
+        await controller.refresh_now()
+        original_gateway = controller._gateways["group_a.sub1"]
+
+        _write_accounts_file(
+            config_path,
+            {
+                "main_accounts": [
+                    {
+                        "main_id": "group_a",
+                        "name": "Group A",
+                        "children": [
+                            {"account_id": "sub1", "name": "Sub One", "api_key": "k1-updated", "api_secret": "s1-updated"},
+                        ],
+                    }
+                ]
+            },
+        )
+
+        await controller.reload_accounts()
+        await controller.refresh_now()
+        assert TrackingGateway.close_calls == {"group_a.sub1": 1}
+        assert controller._gateways["group_a.sub1"] is not original_gateway
+        assert controller._gateways["group_a.sub1"].account.api_key == "k1-updated"
+        assert factory_calls == ["k1", "k1-updated"]
+    finally:
+        await controller.close()
+
+
+def _write_accounts_file(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
 
 
 class FallbackGateway(FakeMonitorGateway):
