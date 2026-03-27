@@ -311,6 +311,32 @@
 
     .group-head h2 { margin: 0; }
 
+    .group-actions {
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .group-toggle-button {
+      border: 1px solid rgba(46, 32, 14, 0.08);
+      border-radius: 999px;
+      background: var(--panel-soft);
+      color: var(--text);
+      padding: 8px 14px;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.2s ease, opacity 0.2s ease;
+      white-space: nowrap;
+    }
+
+    .group-toggle-button:hover {
+      background: rgba(255, 255, 255, 0.94);
+    }
+
     .group-badges {
       display: inline-flex;
       align-items: center;
@@ -330,6 +356,70 @@
       padding: 0 22px 22px;
       display: grid;
       gap: 14px;
+    }
+
+    .account-list.is-collapsed {
+      display: none;
+    }
+
+    .account-switcher {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .account-switch-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid rgba(46, 32, 14, 0.1);
+      border-radius: 20px;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(240, 232, 223, 0.94));
+      color: var(--text);
+      padding: 16px 22px;
+      font: inherit;
+      font-size: clamp(16px, 1.6vw, 22px);
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      line-height: 1.1;
+      cursor: pointer;
+      transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+      min-width: 148px;
+      text-align: center;
+      text-decoration: none;
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.7),
+        0 10px 20px rgba(48, 31, 12, 0.06);
+    }
+
+    .account-switch-button:hover {
+      border-color: rgba(182, 108, 47, 0.2);
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 238, 228, 0.96));
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.72),
+        0 14px 26px rgba(48, 31, 12, 0.1);
+    }
+
+    .account-switch-button:focus-visible {
+      outline: none;
+      border-color: rgba(182, 108, 47, 0.45);
+      box-shadow:
+        0 0 0 3px rgba(182, 108, 47, 0.16),
+        inset 0 1px 0 rgba(255, 255, 255, 0.72),
+        0 14px 26px rgba(48, 31, 12, 0.1);
+    }
+
+    .account-switch-button.is-active {
+      border-color: rgba(46, 126, 63, 0.28);
+      background: linear-gradient(180deg, #75d24d 0%, #57b933 100%);
+      color: #10200e;
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.28),
+        0 14px 28px rgba(67, 139, 43, 0.22);
+    }
+
+    .account-single-view {
+      display: block;
     }
 
     .account { overflow: hidden; }
@@ -412,6 +502,12 @@
         margin-left: 0;
       }
       .toolbar { padding: 12px 16px; }
+      .account-switch-button {
+        min-width: 0;
+        flex: 1 1 calc(50% - 6px);
+        padding: 14px 16px;
+        font-size: 18px;
+      }
       table { display: block; overflow-x: auto; }
     }
   </style>
@@ -477,6 +573,9 @@
     let importBusy = false;
     let refreshCooldownSeconds = 0;
     let refreshCooldownTimer = null;
+    let latestPayload = null;
+    const groupExpandedState = {};
+    const groupSelectedAccountState = {};
 
     function fmt(value) {
       const number = Number(value || 0);
@@ -688,6 +787,69 @@
       `;
     }
 
+    function currentGroups() {
+      return Array.isArray(latestPayload?.groups) ? latestPayload.groups : [];
+    }
+
+    function findGroupByMainId(mainAccountId) {
+      return currentGroups().find((group) => String(group.main_account_id || '') === String(mainAccountId)) || null;
+    }
+
+    function findGroupNode(mainAccountId) {
+      return Array.from(groupsContainer.querySelectorAll('.group')).find(
+        (node) => String(node.dataset.mainAccountId || '') === String(mainAccountId)
+      ) || null;
+    }
+
+    function normalizeGroupUiState(groups = currentGroups()) {
+      const validMainIds = new Set();
+
+      for (const group of groups) {
+        const mainAccountId = String(group.main_account_id || '');
+        if (!mainAccountId) {
+          continue;
+        }
+
+        validMainIds.add(mainAccountId);
+        if (!(mainAccountId in groupExpandedState)) {
+          groupExpandedState[mainAccountId] = true;
+        }
+
+        const accounts = Array.isArray(group.accounts) ? group.accounts : [];
+        const selectedAccountId = String(groupSelectedAccountState[mainAccountId] || '');
+        if (!accounts.some((account) => String(account.account_id || '') === selectedAccountId)) {
+          groupSelectedAccountState[mainAccountId] = accounts[0]?.account_id || '';
+        }
+      }
+
+      for (const mainAccountId of Object.keys(groupExpandedState)) {
+        if (!validMainIds.has(mainAccountId)) {
+          delete groupExpandedState[mainAccountId];
+        }
+      }
+
+      for (const mainAccountId of Object.keys(groupSelectedAccountState)) {
+        if (!validMainIds.has(mainAccountId)) {
+          delete groupSelectedAccountState[mainAccountId];
+        }
+      }
+    }
+
+    function isGroupExpanded(mainAccountId) {
+      return groupExpandedState[mainAccountId] !== false;
+    }
+
+    function resolveSelectedAccount(group) {
+      const mainAccountId = String(group.main_account_id || '');
+      const accounts = Array.isArray(group.accounts) ? group.accounts : [];
+      if (!accounts.length) {
+        return null;
+      }
+
+      const selectedAccountId = String(groupSelectedAccountState[mainAccountId] || '');
+      return accounts.find((account) => String(account.account_id || '') === selectedAccountId) || accounts[0];
+    }
+
     function renderAccount(account) {
       const totals = account.totals || {};
       return `
@@ -754,39 +916,6 @@
       `;
     }
 
-    function renderGroup(group) {
-      const summary = group.summary || {};
-      return `
-        <section class="group">
-          <div class="group-head">
-            <div>
-              <h2>${group.main_account_name || group.main_account_id}</h2>
-              <div class="mono">${group.main_account_id}</div>
-            </div>
-            <div class="group-badges">${renderGroupStatusBadges(summary)}</div>
-          </div>
-          <div class="group-summary">
-            ${[
-              { label: '权益', value: fmt(summary.equity), tone: '' },
-              { label: '保证金', value: fmt(summary.margin), tone: '' },
-              { label: '可用余额', value: fmt(summary.available_balance), tone: '' },
-              { label: '未实现盈亏', value: fmt(summary.unrealized_pnl), tone: numberTone(summary.unrealized_pnl) },
-              { label: '分发收益', value: fmt(summary.total_distribution), tone: numberTone(summary.total_distribution) },
-              { label: '7日年化', value: fmtPercent(summary.distribution_apy_7d), tone: numberTone(summary.distribution_apy_7d) },
-            ].map(({ label, value, tone }) => `
-              <div class="metric">
-                <div class="label">${label}</div>
-                <div class="value ${tone}">${value}</div>
-              </div>
-            `).join('')}
-          </div>
-          <div class="account-list">
-            ${(group.accounts || []).map(renderAccount).join('')}
-          </div>
-        </section>
-      `;
-    }
-
     function renderGroupStatusBadges(summary = {}) {
       const successCount = Number(summary.success_count || 0);
       const errorCount = Number(summary.error_count || 0);
@@ -807,7 +936,91 @@
       return badges.join('');
     }
 
+    function renderGroup(group) {
+      const summary = group.summary || {};
+      const mainAccountId = String(group.main_account_id || '');
+      const accounts = Array.isArray(group.accounts) ? group.accounts : [];
+      const expanded = isGroupExpanded(mainAccountId);
+      const activeAccount = resolveSelectedAccount(group);
+      const activeAccountId = String(activeAccount?.account_id || '');
+
+      return `
+        <section class="group" data-main-account-id="${mainAccountId}">
+          <div class="group-head">
+            <div>
+              <h2>${group.main_account_name || group.main_account_id}</h2>
+              <div class="mono">${group.main_account_id}</div>
+            </div>
+            <div class="group-actions">
+              <button
+                class="group-toggle-button"
+                type="button"
+                data-main-account-id="${mainAccountId}"
+                aria-expanded="${expanded ? 'true' : 'false'}"
+              >
+                ${expanded ? '收起子账号' : '展开子账号'}
+              </button>
+              <div class="group-badges">${renderGroupStatusBadges(summary)}</div>
+            </div>
+          </div>
+          <div class="group-summary">
+            ${[
+              { label: '权益', value: fmt(summary.equity), tone: '' },
+              { label: '保证金', value: fmt(summary.margin), tone: '' },
+              { label: '可用余额', value: fmt(summary.available_balance), tone: '' },
+              { label: '未实现盈亏', value: fmt(summary.unrealized_pnl), tone: numberTone(summary.unrealized_pnl) },
+              { label: '分发收益', value: fmt(summary.total_distribution), tone: numberTone(summary.total_distribution) },
+              { label: '7日年化', value: fmtPercent(summary.distribution_apy_7d), tone: numberTone(summary.distribution_apy_7d) },
+            ].map(({ label, value, tone }) => `
+              <div class="metric">
+                <div class="label">${label}</div>
+                <div class="value ${tone}">${value}</div>
+              </div>
+            `).join('')}
+          </div>
+          <div class="account-list${expanded ? '' : ' is-collapsed'}">
+            <div class="account-switcher">
+              ${accounts.map((account) => {
+                const accountId = String(account.account_id || '');
+                const label = account.child_account_name || account.account_name || account.account_id || '-';
+                return `
+                  <button
+                    class="account-switch-button${accountId === activeAccountId ? ' is-active' : ''}"
+                    type="button"
+                    data-main-account-id="${mainAccountId}"
+                    data-account-id="${accountId}"
+                    aria-pressed="${accountId === activeAccountId ? 'true' : 'false'}"
+                  >${label}</button>
+                `;
+              }).join('')}
+            </div>
+            <div class="account-single-view">
+              ${activeAccount ? renderAccount(activeAccount) : '<div class="empty">\u6682\u65e0\u5b50\u8d26\u53f7</div>'}
+            </div>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderGroups(groups = []) {
+      groupsContainer.innerHTML = groups.length
+        ? groups.map(renderGroup).join('')
+        : '<section class="group"><div class="group-head"><h2>暂无分组</h2></div></section>';
+    }
+
+    function replaceGroup(mainAccountId) {
+      const group = findGroupByMainId(mainAccountId);
+      const groupNode = findGroupNode(mainAccountId);
+      if (!group || !groupNode) {
+        renderGroups(currentGroups());
+        return;
+      }
+
+      groupNode.outerHTML = renderGroup(group);
+    }
+
     function render(payload) {
+      latestPayload = payload;
       const status = payload.status || 'idle';
       connectionBadge.textContent = textStatus(status);
       connectionBadge.className = `badge ${statusClass(status)}`;
@@ -818,9 +1031,8 @@
       renderSummary(payload.summary || {});
       renderProfitSummary(payload.profit_summary || {});
       const groups = payload.groups || [];
-      groupsContainer.innerHTML = groups.length
-        ? groups.map(renderGroup).join('')
-        : '<section class="group"><div class="group-head"><h2>暂无分组</h2></div></section>';
+      normalizeGroupUiState(groups);
+      renderGroups(groups);
     }
 
     function describeRefreshResult(refreshResult, elapsedSeconds) {
@@ -1035,6 +1247,34 @@
           return;
         }
         uploadExcel(file);
+      });
+
+      groupsContainer.addEventListener('click', (event) => {
+        const toggleButton = event.target.closest('.group-toggle-button');
+        if (toggleButton) {
+          const mainAccountId = String(toggleButton.dataset.mainAccountId || '');
+          if (!mainAccountId) {
+            return;
+          }
+          groupExpandedState[mainAccountId] = !isGroupExpanded(mainAccountId);
+          replaceGroup(mainAccountId);
+          return;
+        }
+
+        const switchButton = event.target.closest('.account-switch-button');
+        if (!switchButton) {
+          return;
+        }
+
+        const mainAccountId = String(switchButton.dataset.mainAccountId || '');
+        const accountId = String(switchButton.dataset.accountId || '');
+        if (!mainAccountId || !accountId) {
+          return;
+        }
+
+        groupExpandedState[mainAccountId] = true;
+        groupSelectedAccountState[mainAccountId] = accountId;
+        replaceGroup(mainAccountId);
       });
 
       const source = new EventSource(streamUrl);
