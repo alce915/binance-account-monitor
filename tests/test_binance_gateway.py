@@ -112,8 +112,9 @@ async def test_get_unified_account_snapshot_aggregates_distribution_and_assets(t
         if path == "/api/v3/account":
             return {
                 "balances": [
-                    {"asset": "RWUSD", "free": "0.64438356", "locked": "0"},
-                    {"asset": "BNB", "free": "1.25", "locked": "0"},
+                    {"asset": "RWUSD", "free": "0", "locked": "0.64438356"},
+                    {"asset": "BNB", "free": "1.0", "locked": "0.25"},
+                    {"asset": "USDT", "free": "100", "locked": "50"},
                 ]
             }
         raise AssertionError(path)
@@ -157,8 +158,19 @@ async def test_get_unified_account_snapshot_aggregates_distribution_and_assets(t
     assert snapshot["positions"][1]["mark_price"] == Decimal("1995")
     rwusd_asset = next(item for item in snapshot["assets"] if item["asset"] == "RWUSD")
     assert rwusd_asset["wallet_balance"] == Decimal("0.64438356")
+    assert rwusd_asset["available_balance"] == Decimal("0.64438356")
+    assert rwusd_asset["margin_balance"] == Decimal("0.64438356")
+    assert rwusd_asset["max_withdraw_amount"] == Decimal("0.64438356")
     bnb_asset = next(item for item in snapshot["assets"] if item["asset"] == "BNB")
     assert bnb_asset["wallet_balance"] == Decimal("1.25")
+    assert bnb_asset["available_balance"] == Decimal("1.0")
+    assert bnb_asset["margin_balance"] == Decimal("1.25")
+    assert bnb_asset["max_withdraw_amount"] == Decimal("1.0")
+    usdt_asset = next(item for item in snapshot["assets"] if item["asset"] == "USDT")
+    assert usdt_asset["wallet_balance"] == Decimal("1350")
+    assert usdt_asset["available_balance"] == Decimal("1101.1")
+    assert usdt_asset["margin_balance"] == Decimal("1362.5")
+    assert usdt_asset["max_withdraw_amount"] == Decimal("1100")
 
 
 @pytest.mark.asyncio
@@ -344,6 +356,106 @@ async def test_get_unified_account_snapshot_uses_cached_commission_when_income_r
     assert duration_s < 0.25
     assert snapshot["totals"]["total_commission"] == Decimal("-1.25")
     assert snapshot["income_summary"]["total_commission"] == Decimal("-1.25")
+
+
+@pytest.mark.asyncio
+async def test_refresh_income_history_paginates_when_window_hits_limit(tmp_path: Path) -> None:
+    settings = Settings(_env_file=None, monitor_history_db_path=tmp_path / "history.db")
+    gateway = BinanceMonitorGateway(
+        settings,
+        MonitorAccountConfig(
+            account_id="group_a.sub1",
+            child_account_id="sub1",
+            child_account_name="Sub One",
+            main_account_id="group_a",
+            main_account_name="Group A",
+            api_key="k",
+            api_secret="s",
+        ),
+    )
+    end_time = 3_000
+    rows = [
+        {"incomeType": "COMMISSION", "income": "1.0", "asset": "USDT", "time": 1_000, "symbol": "BTCUSDT"},
+        {"incomeType": "FUNDING_FEE", "income": "2.0", "asset": "USDT", "time": 2_000, "symbol": "BTCUSDT"},
+        {"incomeType": "COMMISSION", "income": "3.0", "asset": "USDT", "time": 3_000, "symbol": "ETHUSDT"},
+    ]
+    calls: list[tuple[int, int, int]] = []
+
+    async def fake_signed_request(path: str, params: dict | None = None, *, timeout_s: float | None = None):
+        assert path == "/papi/v1/um/income"
+        assert params is not None
+        calls.append((int(params["startTime"]), int(params["endTime"]), int(params["limit"])))
+        filtered = [
+            row
+            for row in rows
+            if int(params["startTime"]) <= int(row["time"]) <= int(params["endTime"])
+        ]
+        return filtered[: int(params["limit"])]
+
+    gateway._signed_request = fake_signed_request  # type: ignore[method-assign]
+    try:
+        error = await gateway._refresh_income_history(history_window_days=7, income_limit=2, end_time=end_time)
+        summary = await gateway._history_store.summarize_income("group_a.sub1", 7)
+        last_successful_end_time = await gateway._history_store.get_last_successful_end_time("group_a.sub1", "income")
+    finally:
+        await gateway.close()
+
+    assert error is None
+    assert len(calls) > 1
+    assert summary["records"] == 3
+    assert summary["total_income"] == Decimal("6.0")
+    assert summary["by_type"]["COMMISSION"] == Decimal("4.0")
+    assert last_successful_end_time == end_time
+
+
+@pytest.mark.asyncio
+async def test_refresh_distribution_history_paginates_when_window_hits_limit(tmp_path: Path) -> None:
+    settings = Settings(_env_file=None, monitor_history_db_path=tmp_path / "history.db")
+    gateway = BinanceMonitorGateway(
+        settings,
+        MonitorAccountConfig(
+            account_id="group_a.sub1",
+            child_account_id="sub1",
+            child_account_name="Sub One",
+            main_account_id="group_a",
+            main_account_name="Group A",
+            api_key="k",
+            api_secret="s",
+        ),
+    )
+    end_time = 3_000
+    rows = [
+        {"asset": "RWUSD", "amount": "0.5", "divTime": 1_000, "enInfo": "RWUSD rewards distribution"},
+        {"asset": "RWUSD", "amount": "0.7", "divTime": 2_000, "enInfo": "RWUSD rewards distribution"},
+        {"asset": "RWUSD", "amount": "0.9", "divTime": 3_000, "enInfo": "RWUSD rewards distribution"},
+    ]
+    calls: list[tuple[int, int, int]] = []
+
+    async def fake_signed_request_sapi(path: str, params: dict | None = None, *, timeout_s: float | None = None):
+        assert path == "/sapi/v1/asset/assetDividend"
+        assert params is not None
+        calls.append((int(params["startTime"]), int(params["endTime"]), int(params["limit"])))
+        filtered = [
+            row
+            for row in rows
+            if int(params["startTime"]) <= int(row["divTime"]) <= int(params["endTime"])
+        ]
+        return {"rows": filtered[: int(params["limit"])]}
+
+    gateway._signed_request_sapi = fake_signed_request_sapi  # type: ignore[method-assign]
+    try:
+        error = await gateway._refresh_distribution_history(income_limit=2, end_time=end_time)
+        summary = await gateway._history_store.summarize_distribution("group_a.sub1", 7)
+        last_successful_end_time = await gateway._history_store.get_last_successful_end_time("group_a.sub1", "distribution")
+    finally:
+        await gateway.close()
+
+    assert error is None
+    assert len(calls) > 1
+    assert summary["records"] == 3
+    assert summary["total_distribution"] == Decimal("2.1")
+    assert summary["by_asset"]["RWUSD"] == Decimal("2.1")
+    assert last_successful_end_time == end_time
 
 
 @pytest.mark.asyncio

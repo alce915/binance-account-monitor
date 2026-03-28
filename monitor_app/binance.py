@@ -763,12 +763,18 @@ class BinanceMonitorGateway:
                 history_window_days=history_window_days,
                 end_time=end_time,
             )
-            payload, error = await self._optional_request_with_retry(
-                "/papi/v1/um/income",
-                {"startTime": start_time, "endTime": end_time, "limit": income_limit},
+            events, error = await self._fetch_history_events(
+                path="/papi/v1/um/income",
                 label="income history",
+                source=HISTORY_SOURCE_INCOME,
+                start_time=start_time,
+                end_time=end_time,
+                limit=income_limit,
+                request=self._optional_request_with_retry,
+                rows_extractor=lambda payload: payload if isinstance(payload, list) else [],
+                event_builder=lambda payload: self._build_income_events(payload, default_event_time_ms=end_time),
             )
-            if payload is None:
+            if error is not None:
                 await self._history_store.record_source_failure(
                     self._account.account_id,
                     HISTORY_SOURCE_INCOME,
@@ -777,7 +783,6 @@ class BinanceMonitorGateway:
                 )
                 return error
 
-            events = self._build_income_events(payload, default_event_time_ms=end_time)
             batch_stats = await self._history_store.record_history_batch(
                 self._account.account_id,
                 HISTORY_SOURCE_INCOME,
@@ -824,12 +829,18 @@ class BinanceMonitorGateway:
                 history_window_days=DISTRIBUTION_WINDOW_DAYS,
                 end_time=end_time,
             )
-            payload, error = await self._optional_request_sapi_with_retry(
-                "/sapi/v1/asset/assetDividend",
-                {"startTime": start_time, "endTime": end_time, "limit": income_limit},
+            events, error = await self._fetch_history_events(
+                path="/sapi/v1/asset/assetDividend",
                 label="distribution history",
+                source=HISTORY_SOURCE_DISTRIBUTION,
+                start_time=start_time,
+                end_time=end_time,
+                limit=income_limit,
+                request=self._optional_request_sapi_with_retry,
+                rows_extractor=self._extract_rows,
+                event_builder=lambda payload: self._build_distribution_events(payload, default_event_time_ms=end_time),
             )
-            if payload is None:
+            if error is not None:
                 await self._history_store.record_source_failure(
                     self._account.account_id,
                     HISTORY_SOURCE_DISTRIBUTION,
@@ -838,7 +849,6 @@ class BinanceMonitorGateway:
                 )
                 return error
 
-            events = self._build_distribution_events(payload, default_event_time_ms=end_time)
             batch_stats = await self._history_store.record_history_batch(
                 self._account.account_id,
                 HISTORY_SOURCE_DISTRIBUTION,
@@ -872,6 +882,52 @@ class BinanceMonitorGateway:
                 exc,
                 message="Failed to refresh distribution history",
             )
+
+    async def _fetch_history_events(
+        self,
+        *,
+        path: str,
+        label: str,
+        source: str,
+        start_time: int,
+        end_time: int,
+        limit: int,
+        request: Callable[[str, dict[str, Any], str], Awaitable[tuple[Any, dict[str, Any] | None]]],
+        rows_extractor: Callable[[Any], list[dict[str, Any]]],
+        event_builder: Callable[[Any], list[HistoryEvent]],
+    ) -> tuple[list[HistoryEvent], dict[str, Any] | None]:
+        if start_time > end_time:
+            return [], None
+
+        bounded_limit = max(1, int(limit or 1))
+        pending_windows: list[tuple[int, int]] = [(start_time, end_time)]
+        events: list[HistoryEvent] = []
+
+        while pending_windows:
+            window_start, window_end = pending_windows.pop()
+            payload, error = await request(
+                path,
+                {"startTime": window_start, "endTime": window_end, "limit": bounded_limit},
+                label=label,
+            )
+            if payload is None:
+                return [], error
+
+            rows = rows_extractor(payload)
+            if len(rows) >= bounded_limit:
+                if window_start >= window_end:
+                    raise MonitorGatewayError(
+                        f"{source} history window saturated at {window_start}; refusing to skip records"
+                    )
+                midpoint = window_start + ((window_end - window_start) // 2)
+                pending_windows.append((midpoint + 1, window_end))
+                pending_windows.append((window_start, midpoint))
+                continue
+
+            events.extend(event_builder(payload))
+
+        events.sort(key=lambda event: (event.event_time_ms, event.unique_key))
+        return events, None
 
     async def _refresh_interest_source(
         self,
@@ -1220,53 +1276,63 @@ class BinanceMonitorGateway:
     def _parse_assets(
         self,
         payload: list[dict[str, Any]],
-        spot_balances: dict[str, Decimal] | None = None,
+        spot_balances: dict[str, dict[str, Decimal]] | None = None,
     ) -> list[dict[str, Any]]:
         assets: list[dict[str, Any]] = []
-        spot_balances = dict(spot_balances or {})
+        spot_balances = {asset: dict(values) for asset, values in (spot_balances or {}).items()}
         for item in payload:
             asset = str(item.get("asset") or "")
-            spot_balance = spot_balances.pop(asset, Decimal("0"))
-            wallet_balance = Decimal(item.get("crossWalletBalance") or "0") + spot_balance
+            spot_balance = spot_balances.pop(asset, {"free": Decimal("0"), "locked": Decimal("0"), "total": Decimal("0")})
+            spot_total = Decimal(str(spot_balance.get("total") or "0"))
+            spot_free = Decimal(str(spot_balance.get("free") or "0"))
+            cross_wallet_balance = Decimal(item.get("crossWalletBalance") or "0")
             cross_unrealized_pnl = Decimal(item.get("crossUnPnl") or "0")
+            wallet_balance = cross_wallet_balance + spot_total
+            spot_display_available = spot_free if spot_free > Decimal("0") else spot_total
+            margin_balance = Decimal(item.get("marginBalance") or "0")
+            if margin_balance == Decimal("0") and (cross_wallet_balance != Decimal("0") or cross_unrealized_pnl != Decimal("0")):
+                margin_balance = cross_wallet_balance + cross_unrealized_pnl
             if wallet_balance == Decimal("0") and cross_unrealized_pnl == Decimal("0"):
                 continue
             assets.append(
                 {
                     "asset": asset,
                     "wallet_balance": wallet_balance,
-                    "cross_wallet_balance": Decimal(item.get("crossWalletBalance") or "0"),
+                    "cross_wallet_balance": cross_wallet_balance,
                     "cross_unrealized_pnl": cross_unrealized_pnl,
-                    "available_balance": Decimal(item.get("availableBalance") or "0"),
+                    "available_balance": Decimal(item.get("availableBalance") or "0") + spot_display_available,
                     "initial_margin": Decimal(item.get("initialMargin") or "0"),
                     "maintenance_margin": Decimal(item.get("maintMargin") or "0"),
-                    "margin_balance": Decimal(item.get("marginBalance") or "0"),
-                    "max_withdraw_amount": Decimal(item.get("maxWithdrawAmount") or "0"),
+                    "margin_balance": margin_balance + spot_total,
+                    "max_withdraw_amount": Decimal(item.get("maxWithdrawAmount") or "0") + spot_display_available,
                 }
             )
         for asset, spot_balance in spot_balances.items():
-            if spot_balance == Decimal("0"):
+            spot_total = Decimal(str(spot_balance.get("total") or "0"))
+            spot_free = Decimal(str(spot_balance.get("free") or "0"))
+            if spot_total == Decimal("0"):
                 continue
+            spot_display_available = spot_free if spot_free > Decimal("0") else spot_total
             assets.append(
                 {
                     "asset": asset,
-                    "wallet_balance": spot_balance,
+                    "wallet_balance": spot_total,
                     "cross_wallet_balance": Decimal("0"),
                     "cross_unrealized_pnl": Decimal("0"),
-                    "available_balance": spot_balance,
+                    "available_balance": spot_display_available,
                     "initial_margin": Decimal("0"),
                     "maintenance_margin": Decimal("0"),
-                    "margin_balance": Decimal("0"),
-                    "max_withdraw_amount": spot_balance,
+                    "margin_balance": spot_total,
+                    "max_withdraw_amount": spot_display_available,
                 }
             )
         assets.sort(key=lambda entry: entry["asset"])
         return assets
 
-    def _extract_previous_spot_balances(self, previous_snapshot: dict[str, Any] | None) -> dict[str, Decimal]:
+    def _extract_previous_spot_balances(self, previous_snapshot: dict[str, Any] | None) -> dict[str, dict[str, Decimal]]:
         if not isinstance(previous_snapshot, dict):
             return {}
-        balances: dict[str, Decimal] = {}
+        balances: dict[str, dict[str, Decimal]] = {}
         for item in previous_snapshot.get("assets", []) or []:
             if not isinstance(item, dict):
                 continue
@@ -1277,7 +1343,16 @@ class BinanceMonitorGateway:
             cross_wallet_balance = Decimal(str(item.get("cross_wallet_balance") or "0"))
             spot_balance = wallet_balance - cross_wallet_balance
             if spot_balance != Decimal("0"):
-                balances[asset] = spot_balance
+                available_balance = Decimal(str(item.get("available_balance") or "0"))
+                max_withdraw_amount = Decimal(str(item.get("max_withdraw_amount") or "0"))
+                spot_free = max(Decimal("0"), min(spot_balance, max(available_balance, max_withdraw_amount)))
+                if spot_free == Decimal("0") and spot_balance > Decimal("0"):
+                    spot_free = spot_balance
+                balances[asset] = {
+                    "free": spot_free,
+                    "locked": max(spot_balance - spot_free, Decimal("0")),
+                    "total": spot_balance,
+                }
         return balances
 
     def _previous_section_summary(
@@ -1310,22 +1385,28 @@ class BinanceMonitorGateway:
                 return value
         return value
 
-    def _parse_spot_balances(self, payload: Any) -> dict[str, Decimal]:
+    def _parse_spot_balances(self, payload: Any) -> dict[str, dict[str, Decimal]]:
         if not isinstance(payload, dict):
             return {}
         balances = payload.get("balances")
         if not isinstance(balances, list):
             return {}
-        spot_balances: dict[str, Decimal] = {}
+        spot_balances: dict[str, dict[str, Decimal]] = {}
         for item in balances:
             if not isinstance(item, dict):
                 continue
             asset = str(item.get("asset") or "")
             if not asset:
                 continue
-            balance = Decimal(item.get("free") or "0") + Decimal(item.get("locked") or "0")
-            if balance != Decimal("0"):
-                spot_balances[asset] = balance
+            free_balance = Decimal(item.get("free") or "0")
+            locked_balance = Decimal(item.get("locked") or "0")
+            total_balance = free_balance + locked_balance
+            if total_balance != Decimal("0"):
+                spot_balances[asset] = {
+                    "free": free_balance,
+                    "locked": locked_balance,
+                    "total": total_balance,
+                }
         return spot_balances
 
     def _build_income_events(self, payload: Any, *, default_event_time_ms: int) -> list[HistoryEvent]:

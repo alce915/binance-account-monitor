@@ -611,6 +611,15 @@
       return number > 0 ? 'value-positive' : 'value-negative';
     }
 
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
     function textStatus(status) {
       const statusMap = {
         ok: '正常',
@@ -747,10 +756,11 @@
 
       profitCards.innerHTML = periods.map((period) => {
         const tone = numberTone(period.amount);
+        const safeLabel = escapeHtml(period.label || '-');
         const note = period.complete ? '' : '<div class="card-note">历史回补中</div>';
         return `
           <article class="card">
-            <div class="label">${period.label}</div>
+            <div class="label">${safeLabel}</div>
             <div class="value ${tone}">${fmt(period.amount)}丨${fmtPercent(period.rate)}</div>
             ${note}
           </article>
@@ -852,14 +862,18 @@
 
     function renderAccount(account) {
       const totals = account.totals || {};
+      const accountTitle = escapeHtml(account.child_account_name || account.account_name || account.account_id || '-');
+      const accountId = escapeHtml(account.account_id || '-');
+      const accountStatus = escapeHtml(textAccountStatus(account.account_status));
+      const snapshotStatus = escapeHtml(textStatus(account.status));
       return `
         <article class="account">
           <div class="account-head">
             <div>
-              <h3>${account.child_account_name || account.account_name || account.account_id}</h3>
-              <div class="mono">${account.account_id} | ${textAccountStatus(account.account_status)}</div>
+              <h3>${accountTitle}</h3>
+              <div class="mono">${accountId} | ${accountStatus}</div>
             </div>
-            <div class="badge ${statusClass(account.status)}">${textStatus(account.status)}</div>
+            <div class="badge ${statusClass(account.status)}">${snapshotStatus}</div>
           </div>
           <div class="account-grid">
             ${[
@@ -883,8 +897,8 @@
               account.positions || [],
               (row) => `
                 <tr>
-                  <td class="mono">${row.symbol || '-'}</td>
-                  <td class="${positionSideTone(row.position_side)}">${textPositionSide(row.position_side)}</td>
+                  <td class="mono">${escapeHtml(row.symbol || '-')}</td>
+                  <td class="${positionSideTone(row.position_side)}">${escapeHtml(textPositionSide(row.position_side))}</td>
                   <td>${fmt(row.qty)}</td>
                   <td>${fmt(row.entry_price)}</td>
                   <td>${fmt(row.mark_price)}</td>
@@ -902,7 +916,7 @@
               account.assets || [],
               (row) => `
                 <tr>
-                  <td class="mono">${row.asset || '-'}</td>
+                  <td class="mono">${escapeHtml(row.asset || '-')}</td>
                   <td>${fmt(row.wallet_balance)}</td>
                   <td>${fmt(row.available_balance)}</td>
                   <td>${fmt(row.margin_balance)}</td>
@@ -943,22 +957,25 @@
       const expanded = isGroupExpanded(mainAccountId);
       const activeAccount = resolveSelectedAccount(group);
       const activeAccountId = String(activeAccount?.account_id || '');
+      const safeMainAccountId = escapeHtml(mainAccountId);
+      const safeMainAccountName = escapeHtml(group.main_account_name || group.main_account_id || '-');
+      const toggleLabel = expanded ? '收起子账号' : '展开子账号';
 
       return `
-        <section class="group" data-main-account-id="${mainAccountId}">
+        <section class="group" data-main-account-id="${safeMainAccountId}">
           <div class="group-head">
             <div>
-              <h2>${group.main_account_name || group.main_account_id}</h2>
-              <div class="mono">${group.main_account_id}</div>
+              <h2>${safeMainAccountName}</h2>
+              <div class="mono">${safeMainAccountId}</div>
             </div>
             <div class="group-actions">
               <button
                 class="group-toggle-button"
                 type="button"
-                data-main-account-id="${mainAccountId}"
+                data-main-account-id="${safeMainAccountId}"
                 aria-expanded="${expanded ? 'true' : 'false'}"
               >
-                ${expanded ? '收起子账号' : '展开子账号'}
+                ${toggleLabel}
               </button>
               <div class="group-badges">${renderGroupStatusBadges(summary)}</div>
             </div>
@@ -982,13 +999,13 @@
             <div class="account-switcher">
               ${accounts.map((account) => {
                 const accountId = String(account.account_id || '');
-                const label = account.child_account_name || account.account_name || account.account_id || '-';
+                const label = escapeHtml(account.child_account_name || account.account_name || account.account_id || '-');
                 return `
                   <button
                     class="account-switch-button${accountId === activeAccountId ? ' is-active' : ''}"
                     type="button"
-                    data-main-account-id="${mainAccountId}"
-                    data-account-id="${accountId}"
+                    data-main-account-id="${safeMainAccountId}"
+                    data-account-id="${escapeHtml(accountId)}"
                     aria-pressed="${accountId === activeAccountId ? 'true' : 'false'}"
                   >${label}</button>
                 `;
@@ -1206,6 +1223,8 @@
         const response = await fetch(groupsUrl, { cache: 'no-store' });
         if (response.ok) {
           render(await response.json());
+        } else {
+          messageText.textContent = `初始化失败：HTTP ${response.status}`;
         }
       } catch (error) {
         messageText.textContent = `初始化失败：${error}`;

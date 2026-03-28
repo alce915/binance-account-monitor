@@ -483,7 +483,7 @@ class AccountMonitorController:
         success_count = int(summary.get("success_count") or 0)
         if account_count == 0:
             return True
-        return success_count == account_count
+        return success_count > 0
 
     def _decorate_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         service = dict(payload.get("service") or {})

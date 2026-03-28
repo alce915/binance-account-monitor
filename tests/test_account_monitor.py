@@ -309,6 +309,89 @@ async def test_refresh_failure_preserves_previous_payload(tmp_path: Path) -> Non
     assert second["refresh_result"]["failed_accounts"][0]["account_id"] == "group_a.sub1"
 
 
+class PartialFailureGateway(FakeMonitorGateway):
+    call_counts: dict[str, int] = {}
+
+    async def get_unified_account_snapshot(
+        self,
+        *,
+        history_window_days: int = 7,
+        income_limit: int = 100,
+        interest_limit: int = 100,
+        previous_snapshot: dict | None = None,
+        mark_price_provider=None,
+        refresh_id: str | None = None,
+    ) -> dict:
+        count = PartialFailureGateway.call_counts.get(self.account.account_id, 0) + 1
+        PartialFailureGateway.call_counts[self.account.account_id] = count
+        if self.account.account_id == "group_a.sub2" and count >= 2:
+            raise RuntimeError("temporary refresh failure")
+        return await super().get_unified_account_snapshot(
+            history_window_days=history_window_days,
+            income_limit=income_limit,
+            interest_limit=interest_limit,
+            previous_snapshot=previous_snapshot,
+            mark_price_provider=mark_price_provider,
+            refresh_id=refresh_id,
+        )
+
+
+@pytest.mark.asyncio
+async def test_refresh_partial_failure_commits_partial_payload(tmp_path: Path) -> None:
+    PartialFailureGateway.call_counts = {}
+    settings = Settings(
+        _env_file=None,
+        monitor_refresh_interval_ms=999999,
+        monitor_history_window_days=3,
+        monitor_history_db_path=tmp_path / "history.db",
+    )
+    account1 = MonitorAccountConfig(
+        account_id="group_a.sub1",
+        child_account_id="sub1",
+        child_account_name="Sub One",
+        main_account_id="group_a",
+        main_account_name="Group A",
+        api_key="k1",
+        api_secret="s1",
+    )
+    account2 = MonitorAccountConfig(
+        account_id="group_a.sub2",
+        child_account_id="sub2",
+        child_account_name="Sub Two",
+        main_account_id="group_a",
+        main_account_name="Group A",
+        api_key="k2",
+        api_secret="s2",
+    )
+    settings.monitor_accounts = {
+        account.account_id: account
+        for account in (account1, account2)
+    }
+    settings.monitor_main_accounts = {
+        "group_a": MainAccountConfig(main_id="group_a", name="Group A", children=(account1, account2)),
+    }
+    controller = AccountMonitorController(settings, gateway_factory=lambda selected: PartialFailureGateway(selected))
+    try:
+        first = await controller.refresh_now()
+        second = await controller.refresh_now()
+    finally:
+        await controller.close()
+
+    assert first["refresh_result"]["success"] is True
+    assert second["refresh_result"]["success"] is True
+    assert second["status"] == "partial"
+    assert second["message"] == "Some accounts failed"
+    assert second["summary"]["account_count"] == 2
+    assert second["summary"]["success_count"] == 1
+    assert second["summary"]["error_count"] == 1
+    assert second["refresh_result"]["failed_accounts"] == [
+        {"account_id": "group_a.sub2", "message": "temporary refresh failure"}
+    ]
+    failing_account = next(account for account in second["accounts"] if account["account_id"] == "group_a.sub2")
+    assert failing_account["status"] == "error"
+    assert failing_account["message"] == "temporary refresh failure"
+
+
 class TrackingGateway(FakeMonitorGateway):
     close_calls: dict[str, int] = {}
 
