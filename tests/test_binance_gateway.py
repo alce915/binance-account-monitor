@@ -117,6 +117,11 @@ async def test_get_unified_account_snapshot_aggregates_distribution_and_assets(t
                     {"asset": "USDT", "free": "100", "locked": "50"},
                 ]
             }
+        if path == "/sapi/v1/asset/get-funding-asset":
+            return [
+                {"asset": "RWUSD", "free": "2.5", "locked": "0.5", "freeze": "0", "withdrawing": "0"},
+                {"asset": "USDT", "free": "15", "locked": "0", "freeze": "0", "withdrawing": "0"},
+            ]
         raise AssertionError(path)
 
     async def fake_public_request_market(path: str, params: dict | None = None, *, timeout_s: float | None = None):
@@ -129,6 +134,7 @@ async def test_get_unified_account_snapshot_aggregates_distribution_and_assets(t
 
     gateway._signed_request = fake_signed_request  # type: ignore[method-assign]
     gateway._signed_request_sapi = fake_signed_request_sapi  # type: ignore[method-assign]
+    gateway._signed_request_sapi_post = fake_signed_request_sapi  # type: ignore[method-assign]
     gateway._public_request_market = fake_public_request_market  # type: ignore[method-assign]
     try:
         snapshot = await gateway.get_unified_account_snapshot(history_window_days=5)
@@ -156,6 +162,24 @@ async def test_get_unified_account_snapshot_aggregates_distribution_and_assets(t
     assert len(snapshot["positions"]) == 2
     assert snapshot["positions"][0]["mark_price"] == Decimal("80500")
     assert snapshot["positions"][1]["mark_price"] == Decimal("1995")
+    assert snapshot["funding_assets"] == [
+        {
+            "asset": "RWUSD",
+            "free": Decimal("2.5"),
+            "locked": Decimal("0.5"),
+            "freeze": Decimal("0"),
+            "withdrawing": Decimal("0"),
+            "total": Decimal("3.0"),
+        },
+        {
+            "asset": "USDT",
+            "free": Decimal("15"),
+            "locked": Decimal("0"),
+            "freeze": Decimal("0"),
+            "withdrawing": Decimal("0"),
+            "total": Decimal("15"),
+        },
+    ]
     rwusd_asset = next(item for item in snapshot["assets"] if item["asset"] == "RWUSD")
     assert rwusd_asset["wallet_balance"] == Decimal("0.64438356")
     assert rwusd_asset["available_balance"] == Decimal("0.64438356")
@@ -244,6 +268,8 @@ async def test_get_unified_account_snapshot_uses_core_and_secondary_retry_budget
             if spot_attempts < 3:
                 raise httpx.ReadTimeout("temporary", request=httpx.Request("GET", f"https://example.com{path}"))
             return {"balances": []}
+        if path == "/sapi/v1/asset/get-funding-asset":
+            return []
         raise AssertionError(path)
 
     async def fake_public_request_market(path: str, params: dict | None = None, *, timeout_s: float | None = None):
@@ -257,6 +283,7 @@ async def test_get_unified_account_snapshot_uses_core_and_secondary_retry_budget
 
     gateway._signed_request = fake_signed_request  # type: ignore[method-assign]
     gateway._signed_request_sapi = fake_signed_request_sapi  # type: ignore[method-assign]
+    gateway._signed_request_sapi_post = fake_signed_request_sapi  # type: ignore[method-assign]
     gateway._public_request_market = fake_public_request_market  # type: ignore[method-assign]
     try:
         snapshot = await gateway.get_unified_account_snapshot(history_window_days=5)
@@ -337,6 +364,8 @@ async def test_get_unified_account_snapshot_uses_cached_commission_when_income_r
             return {"rows": []}
         if path == "/api/v3/account":
             return {"balances": []}
+        if path == "/sapi/v1/asset/get-funding-asset":
+            return []
         raise AssertionError(path)
 
     async def fake_public_request_market(path: str, params: dict | None = None, *, timeout_s: float | None = None):
@@ -345,6 +374,7 @@ async def test_get_unified_account_snapshot_uses_cached_commission_when_income_r
 
     gateway._signed_request = fake_signed_request  # type: ignore[method-assign]
     gateway._signed_request_sapi = fake_signed_request_sapi  # type: ignore[method-assign]
+    gateway._signed_request_sapi_post = fake_signed_request_sapi  # type: ignore[method-assign]
     gateway._public_request_market = fake_public_request_market  # type: ignore[method-assign]
     try:
         started_at = perf_counter()
@@ -574,10 +604,12 @@ async def test_snapshot_marks_secondary_network_failures_as_fallback_sections(tm
 
     gateway._signed_request = fake_signed_request  # type: ignore[method-assign]
     gateway._signed_request_sapi = failing_signed_request_sapi  # type: ignore[method-assign]
+    gateway._signed_request_sapi_post = failing_signed_request_sapi  # type: ignore[method-assign]
     gateway._public_request_market = failing_public_request_market  # type: ignore[method-assign]
     previous_snapshot = {
         "positions": [{"symbol": "BTCUSDT", "mark_price": Decimal("81000")}],
         "assets": [{"asset": "RWUSD", "wallet_balance": Decimal("2"), "cross_wallet_balance": Decimal("0")}],
+        "funding_assets": [{"asset": "RWUSD", "free": Decimal("1.5"), "locked": Decimal("0"), "freeze": Decimal("0"), "withdrawing": Decimal("0"), "total": Decimal("1.5")}],
         "distribution_summary": {
             "window_days": 7,
             "records": 1,
@@ -606,5 +638,7 @@ async def test_snapshot_marks_secondary_network_failures_as_fallback_sections(tm
     assert snapshot["section_errors"]["distribution_history"]["used_fallback"] is True
     assert snapshot["section_errors"]["spot_account"]["source"] == "network"
     assert snapshot["section_errors"]["spot_account"]["used_fallback"] is True
+    assert snapshot["section_errors"]["funding_assets"]["source"] == "network"
+    assert snapshot["section_errors"]["funding_assets"]["used_fallback"] is True
     assert snapshot["section_errors"]["mark_prices"]["source"] == "network"
     assert "mark_prices" in snapshot["diagnostics"]["fallback_sections"]

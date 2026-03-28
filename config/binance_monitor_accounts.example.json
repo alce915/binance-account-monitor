@@ -3,12 +3,16 @@
     {
       "main_id": "group_a",
       "name": "Main Group A",
+      "transfer_api_key": "replace-with-main-transfer-api-key",
+      "transfer_api_secret": "replace-with-main-transfer-api-secret",
+      "transfer_uid": "123456789",
       "children": [
         {
           "account_id": "sub1",
           "name": "Sub Account 1",
           "api_key": "replace-with-api-key-1",
           "api_secret": "replace-with-api-secret-1",
+          "uid": "223456789",
           "use_testnet": false,
           "rest_base_url": "",
           "ws_base_url": ""
@@ -18,6 +22,7 @@
           "name": "Sub Account 2",
           "api_key": "replace-with-api-key-2",
           "api_secret": "replace-with-api-secret-2",
+          "uid": "323456789",
           "use_testnet": true,
           "rest_base_url": "",
           "ws_base_url": ""
@@ -33,6 +38,7 @@
           "name": "Sub Account 1",
           "api_key": "replace-with-api-key-3",
           "api_secret": "replace-with-api-secret-3",
+          "uid": "423456789",
           "use_testnet": false,
           "rest_base_url": "",
           "ws_base_url": ""

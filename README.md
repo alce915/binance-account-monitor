@@ -46,6 +46,10 @@ scripts\restart_monitor_service.bat
 - `GET /api/monitor/groups`
 - `GET /api/monitor/accounts`
 - `POST /api/config/import/excel`
+- `GET /api/config/import/excel-template`
+- `GET /api/funding/groups/{main_id}`
+- `POST /api/funding/groups/{main_id}/distribute`
+- `POST /api/funding/groups/{main_id}/collect`
 - `GET /stream/monitor`
 
 ## 配置说明
@@ -55,3 +59,14 @@ scripts\restart_monitor_service.bat
 - `config/binance_monitor_accounts.json`
 
 主账户只作为分组节点使用，真正的 Binance API 凭证由子账户承担。
+## Funding Transfer
+
+- Excel 模板新增 `uid` 列。
+- 如需开启资金归集，请在同一分组下新增一行保留记录：`account_id=main`。
+- `account_id=main` 这一行只用于主账号 Funding 归集 API 配置，不会出现在监控子账号列表里。
+- 生成后的 JSON 结构会额外包含：
+  - `main_accounts[].transfer_api_key`
+  - `main_accounts[].transfer_api_secret`
+  - `main_accounts[].transfer_uid`
+  - `main_accounts[].children[].uid`
+- 监控页顶部 `导入 Excel` 右侧新增 `资金归集` 按钮，可对 Funding 账户执行主账号分发与子账号归集。

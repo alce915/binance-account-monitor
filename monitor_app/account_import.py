@@ -14,7 +14,7 @@ from monitor_app.config import normalize_monitor_id, parse_monitor_accounts_payl
 
 
 REQUIRED_COLUMNS = ("main_id", "main_name", "account_id", "name", "api_key", "api_secret")
-OPTIONAL_COLUMNS = ("use_testnet", "rest_base_url", "ws_base_url")
+OPTIONAL_COLUMNS = ("uid", "use_testnet", "rest_base_url", "ws_base_url")
 SUPPORTED_COLUMNS = REQUIRED_COLUMNS + OPTIONAL_COLUMNS
 TRUE_VALUES = {"1", "true", "yes", "on"}
 FALSE_VALUES = {"0", "false", "no", "off"}
@@ -67,10 +67,11 @@ def parse_accounts_excel(
 
             main_id = _parse_required_id(row_data["main_id"], field_name="main_id", row_index=row_index)
             main_name = _parse_required_text(row_data["main_name"], field_name="main_name", row_index=row_index)
-            child_account_id = _parse_required_id(row_data["account_id"], field_name="account_id", row_index=row_index)
-            child_name = _parse_required_text(row_data["name"], field_name="name", row_index=row_index)
+            account_id = _parse_required_id(row_data["account_id"], field_name="account_id", row_index=row_index)
+            row_name = _parse_required_text(row_data["name"], field_name="name", row_index=row_index)
             api_key = _parse_required_text(row_data["api_key"], field_name="api_key", row_index=row_index)
             api_secret = _parse_required_text(row_data["api_secret"], field_name="api_secret", row_index=row_index)
+            uid = _parse_optional_text(row_data["uid"])
             use_testnet = _parse_optional_bool(row_data["use_testnet"], field_name="use_testnet", row_index=row_index)
             rest_base_url = _parse_optional_text(row_data["rest_base_url"])
             ws_base_url = _parse_optional_text(row_data["ws_base_url"])
@@ -80,37 +81,57 @@ def parse_accounts_excel(
                 {
                     "main_id": main_id,
                     "name": main_name,
+                    "transfer_api_key": "",
+                    "transfer_api_secret": "",
+                    "transfer_uid": "",
                     "children": [],
                     "_child_ids": set(),
+                    "_has_main_row": False,
                 },
             )
             if grouped["name"] != main_name:
                 raise AccountImportError(
                     f"Row {row_index}: main_name must stay consistent for main_id {main_id}"
                 )
-            if child_account_id in grouped["_child_ids"]:
+
+            if account_id == "main":
+                if grouped["_has_main_row"]:
+                    raise AccountImportError(f"Row {row_index}: duplicate reserved main row under main_id {main_id}")
+                if not uid:
+                    raise AccountImportError(f"Row {row_index}: uid is required for reserved main row")
+                grouped["transfer_api_key"] = api_key
+                grouped["transfer_api_secret"] = api_secret
+                grouped["transfer_uid"] = uid
+                grouped["_has_main_row"] = True
+                continue
+
+            if account_id in grouped["_child_ids"]:
                 raise AccountImportError(
-                    f"Row {row_index}: duplicate account_id {child_account_id} under main_id {main_id}"
+                    f"Row {row_index}: duplicate account_id {account_id} under main_id {main_id}"
                 )
 
             grouped["children"].append(
                 {
-                    "account_id": child_account_id,
-                    "name": child_name,
+                    "account_id": account_id,
+                    "name": row_name,
                     "api_key": api_key,
                     "api_secret": api_secret,
+                    "uid": uid,
                     "use_testnet": use_testnet,
                     "rest_base_url": rest_base_url,
                     "ws_base_url": ws_base_url,
                 }
             )
-            grouped["_child_ids"].add(child_account_id)
+            grouped["_child_ids"].add(account_id)
 
         payload = {
             "main_accounts": [
                 {
                     "main_id": grouped["main_id"],
                     "name": grouped["name"],
+                    "transfer_api_key": grouped["transfer_api_key"],
+                    "transfer_api_secret": grouped["transfer_api_secret"],
+                    "transfer_uid": grouped["transfer_uid"],
                     "children": grouped["children"],
                 }
                 for _, grouped in sorted(grouped_rows.items(), key=lambda item: item[0])
@@ -155,9 +176,62 @@ def build_accounts_excel_template() -> bytes:
     worksheet = workbook.active
     worksheet.title = "accounts"
     worksheet.append(list(SUPPORTED_COLUMNS))
-    worksheet.append(["group_a", "A组", "sub1", "张三", "replace-with-api-key-1", "replace-with-api-secret-1", "false", "", ""])
-    worksheet.append(["group_a", "A组", "sub2", "李四", "replace-with-api-key-2", "replace-with-api-secret-2", "true", "", ""])
-    worksheet.append(["group_b", "B组", "sub1", "王五", "replace-with-api-key-3", "replace-with-api-secret-3", "false", "", ""])
+    worksheet.append(
+        [
+            "group_a",
+            "Group A",
+            "main",
+            "Main Transfer",
+            "replace-with-main-api-key",
+            "replace-with-main-api-secret",
+            "123456789",
+            "false",
+            "",
+            "",
+        ]
+    )
+    worksheet.append(
+        [
+            "group_a",
+            "Group A",
+            "sub1",
+            "Sub One",
+            "replace-with-api-key-1",
+            "replace-with-api-secret-1",
+            "223456789",
+            "false",
+            "",
+            "",
+        ]
+    )
+    worksheet.append(
+        [
+            "group_a",
+            "Group A",
+            "sub2",
+            "Sub Two",
+            "replace-with-api-key-2",
+            "replace-with-api-secret-2",
+            "323456789",
+            "false",
+            "",
+            "",
+        ]
+    )
+    worksheet.append(
+        [
+            "group_b",
+            "Group B",
+            "sub1",
+            "Sub Three",
+            "replace-with-api-key-3",
+            "replace-with-api-secret-3",
+            "423456789",
+            "false",
+            "",
+            "",
+        ]
+    )
 
     buffer = BytesIO()
     workbook.save(buffer)

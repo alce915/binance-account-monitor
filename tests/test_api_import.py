@@ -53,6 +53,7 @@ class FakeImportGateway:
             },
             "positions": [],
             "assets": [],
+            "funding_assets": [],
             "income_summary": {
                 "window_days": history_window_days,
                 "records": 0,
@@ -145,6 +146,9 @@ def test_import_excel_endpoint_replaces_accounts_and_refreshes(monkeypatch, tmp_
     persisted = json.loads(settings.monitor_accounts_file.read_text(encoding="utf-8"))
     assert len(persisted["main_accounts"]) == 2
     assert persisted["main_accounts"][0]["main_id"] == "group_a"
+    assert persisted["main_accounts"][0]["transfer_api_key"] == "mk1"
+    assert persisted["main_accounts"][0]["transfer_uid"] == "123456789"
+    assert persisted["main_accounts"][0]["children"][0]["uid"] == "223456789"
 
 
 def test_import_excel_endpoint_rejects_non_xlsx(monkeypatch, tmp_path: Path) -> None:
@@ -251,21 +255,48 @@ def test_download_excel_template_endpoint_returns_sample_workbook() -> None:
         "name",
         "api_key",
         "api_secret",
+        "uid",
         "use_testnet",
         "rest_base_url",
         "ws_base_url",
     )
-    assert rows[1][:4] == ("group_a", "A组", "sub1", "张三")
-    assert rows[3][:4] == ("group_b", "B组", "sub1", "王五")
+    assert rows[1][:7] == (
+        "group_a",
+        "Group A",
+        "main",
+        "Main Transfer",
+        "replace-with-main-api-key",
+        "replace-with-main-api-secret",
+        "123456789",
+    )
+    assert rows[2][:7] == (
+        "group_a",
+        "Group A",
+        "sub1",
+        "Sub One",
+        "replace-with-api-key-1",
+        "replace-with-api-secret-1",
+        "223456789",
+    )
+    assert rows[4][:7] == (
+        "group_b",
+        "Group B",
+        "sub1",
+        "Sub Three",
+        "replace-with-api-key-3",
+        "replace-with-api-secret-3",
+        "423456789",
+    )
 
 
 def _build_workbook_bytes() -> bytes:
     workbook = Workbook()
     worksheet = workbook.active
-    worksheet.append(["main_id", "main_name", "account_id", "name", "api_key", "api_secret", "use_testnet"])
-    worksheet.append(["group_a", "Group A", "sub1", "Sub One", "k1", "s1", "true"])
-    worksheet.append(["group_a", "Group A", "sub2", "Sub Two", "k2", "s2", ""])
-    worksheet.append(["group_b", "Group B", "sub1", "Sub Three", "k3", "s3", "false"])
+    worksheet.append(["main_id", "main_name", "account_id", "name", "api_key", "api_secret", "uid", "use_testnet"])
+    worksheet.append(["group_a", "Group A", "main", "Main Transfer", "mk1", "ms1", "123456789", ""])
+    worksheet.append(["group_a", "Group A", "sub1", "Sub One", "k1", "s1", "223456789", "true"])
+    worksheet.append(["group_a", "Group A", "sub2", "Sub Two", "k2", "s2", "", ""])
+    worksheet.append(["group_b", "Group B", "sub1", "Sub Three", "k3", "s3", "323456789", "false"])
     buffer = BytesIO()
     workbook.save(buffer)
     workbook.close()

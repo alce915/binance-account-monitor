@@ -140,7 +140,13 @@ class BinanceMonitorGateway:
         *,
         timeout_s: float | None = None,
     ) -> Any:
-        return await self._signed_request_with_client(self._papi_client, path, params, timeout_s=timeout_s)
+        return await self._signed_request_with_client(
+            self._papi_client,
+            "GET",
+            path,
+            params,
+            timeout_s=timeout_s,
+        )
 
     async def _signed_request_sapi(
         self,
@@ -149,7 +155,28 @@ class BinanceMonitorGateway:
         *,
         timeout_s: float | None = None,
     ) -> Any:
-        return await self._signed_request_with_client(self._sapi_client, path, params, timeout_s=timeout_s)
+        return await self._signed_request_with_client(
+            self._sapi_client,
+            "GET",
+            path,
+            params,
+            timeout_s=timeout_s,
+        )
+
+    async def _signed_request_sapi_post(
+        self,
+        path: str,
+        params: dict[str, Any] | None = None,
+        *,
+        timeout_s: float | None = None,
+    ) -> Any:
+        return await self._signed_request_with_client(
+            self._sapi_client,
+            "POST",
+            path,
+            params,
+            timeout_s=timeout_s,
+        )
 
     async def _public_request_market(
         self,
@@ -165,6 +192,7 @@ class BinanceMonitorGateway:
     async def _signed_request_with_client(
         self,
         client: httpx.AsyncClient,
+        method: str,
         path: str,
         params: dict[str, Any] | None = None,
         *,
@@ -179,7 +207,7 @@ class BinanceMonitorGateway:
             query.encode("utf-8"),
             hashlib.sha256,
         ).hexdigest()
-        response = await client.get(f"{path}?{query}&signature={signature}", timeout=timeout_s)
+        response = await client.request(method, f"{path}?{query}&signature={signature}", timeout=timeout_s)
         response.raise_for_status()
         return response.json()
 
@@ -248,10 +276,22 @@ class BinanceMonitorGateway:
                 label="spot account",
             )
         )
+        funding_task = asyncio.create_task(
+            self._optional_request_sapi_post_with_retry(
+                "/sapi/v1/asset/get-funding-asset",
+                {"needBtcValuation": "false"},
+                label="funding assets",
+            )
+        )
         secondary_started_at = perf_counter()
-        (distribution_summary, distribution_error), (spot_account_payload, spot_error) = await asyncio.gather(
+        (
+            (distribution_summary, distribution_error),
+            (spot_account_payload, spot_error),
+            (funding_assets_payload, funding_error),
+        ) = await asyncio.gather(
             distribution_task,
             spot_task,
+            funding_task,
         )
         income_summary, income_error = await self._resolve_income_summary(
             cached_income_summary=cached_income_summary,
@@ -271,10 +311,15 @@ class BinanceMonitorGateway:
         )
         timings["profit_summary_ms"] = int((perf_counter() - distribution_profit_started_at) * 1000)
         previous_spot_balances = self._extract_previous_spot_balances(previous_snapshot)
+        previous_funding_assets = self._extract_previous_funding_assets(previous_snapshot)
         if spot_account_payload is not None:
             spot_balances = self._parse_spot_balances(spot_account_payload)
         else:
             spot_balances = previous_spot_balances
+        if funding_assets_payload is not None:
+            funding_assets = self._parse_funding_assets(funding_assets_payload)
+        else:
+            funding_assets = previous_funding_assets
         assets = self._parse_assets(um_account_payload.get("assets", []), spot_balances)
 
         unrealized_pnl = sum((entry["unrealized_pnl"] for entry in positions), Decimal("0"))
@@ -302,6 +347,12 @@ class BinanceMonitorGateway:
                 spot_error,
                 used_fallback=bool(previous_spot_balances),
                 stale=bool(previous_spot_balances),
+            )
+        if funding_error is not None:
+            section_errors["funding_assets"] = self._build_section_error(
+                funding_error,
+                used_fallback=bool(previous_funding_assets),
+                stale=bool(previous_funding_assets),
             )
         if mark_price_result["error"] is not None:
             section_errors["mark_prices"] = self._build_section_error(
@@ -363,6 +414,7 @@ class BinanceMonitorGateway:
             },
             "positions": positions,
             "assets": assets,
+            "funding_assets": funding_assets,
             "income_summary": income_summary,
             "distribution_summary": distribution_summary,
             "distribution_profit_summary": distribution_profit_summary,
@@ -1008,6 +1060,23 @@ class BinanceMonitorGateway:
             timeout_s=timeout_s,
         )
 
+    async def _signed_request_sapi_post_with_retry(
+        self,
+        path: str,
+        params: dict[str, Any] | None = None,
+        *,
+        is_core: bool = False,
+        label: str | None = None,
+    ) -> Any:
+        timeout_s, max_attempts, retry_delays = self._retry_budget(is_core=is_core)
+        return await self._request_with_retry(
+            label=label or path,
+            operation=lambda: self._signed_request_sapi_post(path, params, timeout_s=timeout_s),
+            max_attempts=max_attempts,
+            retry_delays=retry_delays,
+            timeout_s=timeout_s,
+        )
+
     async def _public_request_market_with_retry(self, path: str, params: dict[str, Any] | None = None) -> Any:
         timeout_s, max_attempts, retry_delays = self._retry_budget(is_core=False)
         return await self._request_with_retry(
@@ -1040,6 +1109,19 @@ class BinanceMonitorGateway:
     ) -> tuple[Any, dict[str, Any] | None]:
         try:
             payload = await self._signed_request_sapi_with_retry(path, params, is_core=False, label=label)
+            return payload, None
+        except RetriedRequestError as exc:
+            return None, self._retry_error_payload(exc)
+
+    async def _optional_request_sapi_post_with_retry(
+        self,
+        path: str,
+        params: dict[str, Any],
+        *,
+        label: str,
+    ) -> tuple[Any, dict[str, Any] | None]:
+        try:
+            payload = await self._signed_request_sapi_post_with_retry(path, params, is_core=False, label=label)
             return payload, None
         except RetriedRequestError as exc:
             return None, self._retry_error_payload(exc)
@@ -1355,6 +1437,32 @@ class BinanceMonitorGateway:
                 }
         return balances
 
+    def _extract_previous_funding_assets(self, previous_snapshot: dict[str, Any] | None) -> list[dict[str, Any]]:
+        if not isinstance(previous_snapshot, dict):
+            return []
+        rows = previous_snapshot.get("funding_assets")
+        if not isinstance(rows, list):
+            return []
+        normalized_rows: list[dict[str, Any]] = []
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            asset = str(item.get("asset") or "")
+            if not asset:
+                continue
+            normalized_rows.append(
+                {
+                    "asset": asset,
+                    "free": Decimal(str(item.get("free") or "0")),
+                    "locked": Decimal(str(item.get("locked") or "0")),
+                    "freeze": Decimal(str(item.get("freeze") or "0")),
+                    "withdrawing": Decimal(str(item.get("withdrawing") or "0")),
+                    "total": Decimal(str(item.get("total") or "0")),
+                }
+            )
+        normalized_rows.sort(key=lambda entry: entry["asset"])
+        return normalized_rows
+
     def _previous_section_summary(
         self,
         previous_snapshot: dict[str, Any] | None,
@@ -1408,6 +1516,35 @@ class BinanceMonitorGateway:
                     "total": total_balance,
                 }
         return spot_balances
+
+    def _parse_funding_assets(self, payload: Any) -> list[dict[str, Any]]:
+        rows = payload if isinstance(payload, list) else []
+        funding_assets: list[dict[str, Any]] = []
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            asset = str(item.get("asset") or "")
+            if not asset:
+                continue
+            free = Decimal(str(item.get("free") or "0"))
+            locked = Decimal(str(item.get("locked") or "0"))
+            freeze = Decimal(str(item.get("freeze") or "0"))
+            withdrawing = Decimal(str(item.get("withdrawing") or "0"))
+            total = free + locked + freeze + withdrawing
+            if total == Decimal("0"):
+                continue
+            funding_assets.append(
+                {
+                    "asset": asset,
+                    "free": free,
+                    "locked": locked,
+                    "freeze": freeze,
+                    "withdrawing": withdrawing,
+                    "total": total,
+                }
+            )
+        funding_assets.sort(key=lambda entry: entry["asset"])
+        return funding_assets
 
     def _build_income_events(self, payload: Any, *, default_event_time_ms: int) -> list[HistoryEvent]:
         rows = payload if isinstance(payload, list) else []

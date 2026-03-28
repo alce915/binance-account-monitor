@@ -22,6 +22,7 @@ class MonitorAccountConfig:
     main_account_name: str
     api_key: str
     api_secret: str
+    uid: str = ""
     use_testnet: bool = False
     rest_base_url: str = ""
     ws_base_url: str = ""
@@ -56,6 +57,13 @@ class MainAccountConfig:
     main_id: str
     name: str
     children: tuple[MonitorAccountConfig, ...]
+    transfer_api_key: str = ""
+    transfer_api_secret: str = ""
+    transfer_uid: str = ""
+
+    @property
+    def has_transfer_credentials(self) -> bool:
+        return bool(self.transfer_api_key and self.transfer_api_secret and self.transfer_uid)
 
 
 def normalize_monitor_id(value: object, *, field_name: str) -> str:
@@ -93,8 +101,9 @@ def parse_monitor_accounts_payload(
         main_name = str(raw_main_account.get("name") or "").strip()
         if not main_name:
             raise ValueError(f"Main account {main_id} must define name")
-        if any(key in raw_main_account for key in ("api_key", "api_secret", "use_testnet", "rest_base_url", "ws_base_url")):
-            raise ValueError(f"Main account {main_id} cannot define API credentials")
+        transfer_api_key = str(raw_main_account.get("transfer_api_key") or "").strip()
+        transfer_api_secret = str(raw_main_account.get("transfer_api_secret") or "").strip()
+        transfer_uid = str(raw_main_account.get("transfer_uid") or "").strip()
         raw_children = raw_main_account.get("children")
         if not isinstance(raw_children, list) or not raw_children:
             raise ValueError(f"Main account {main_id} must define a non-empty children array")
@@ -125,6 +134,7 @@ def parse_monitor_accounts_payload(
                 main_account_name=main_name,
                 api_key=api_key,
                 api_secret=api_secret,
+                uid=str(raw_child.get("uid") or "").strip(),
                 use_testnet=parse_monitor_bool(raw_child.get("use_testnet"), False),
                 rest_base_url=str(raw_child.get("rest_base_url") or "").strip(),
                 ws_base_url=str(raw_child.get("ws_base_url") or "").strip(),
@@ -136,6 +146,9 @@ def parse_monitor_accounts_payload(
         main_accounts[main_id] = MainAccountConfig(
             main_id=main_id,
             name=main_name,
+            transfer_api_key=transfer_api_key,
+            transfer_api_secret=transfer_api_secret,
+            transfer_uid=transfer_uid,
             children=tuple(child_accounts),
         )
 

@@ -253,6 +253,10 @@
       cursor: default;
     }
 
+    #downloadTemplateButton { order: 1; }
+    #importButton { order: 2; }
+    #fundingTransferButton { order: 3; }
+
     .summary {
       margin-top: 18px;
       display: grid;
@@ -479,6 +483,239 @@
 
     .empty { color: var(--muted); padding: 10px 0; }
 
+    .modal-shell {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      z-index: 50;
+    }
+
+    .modal-shell.hidden {
+      display: none;
+    }
+
+    .modal-backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(36, 27, 18, 0.36);
+      backdrop-filter: blur(6px);
+    }
+
+    .modal-panel {
+      position: relative;
+      width: min(1080px, calc(100vw - 32px));
+      max-height: min(840px, calc(100vh - 32px));
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      background: rgba(255, 250, 244, 0.96);
+      box-shadow: 0 24px 60px rgba(36, 27, 18, 0.22);
+    }
+
+    .modal-head,
+    .modal-foot {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 20px 24px;
+      border-bottom: 1px solid rgba(46, 32, 14, 0.08);
+    }
+
+    .modal-foot {
+      border-bottom: 0;
+      border-top: 1px solid rgba(46, 32, 14, 0.08);
+      flex-wrap: wrap;
+    }
+
+    .modal-head h2 {
+      margin: 0;
+      font-size: 24px;
+    }
+
+    .modal-subtitle {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .modal-close {
+      border: 1px solid rgba(46, 32, 14, 0.08);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.8);
+      color: var(--text);
+      width: 40px;
+      height: 40px;
+      font: inherit;
+      font-size: 24px;
+      line-height: 1;
+      cursor: pointer;
+    }
+
+    .modal-body {
+      overflow: auto;
+      padding: 20px 24px 24px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .modal-controls {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 14px;
+      align-items: end;
+    }
+
+    .field {
+      display: grid;
+      gap: 8px;
+    }
+
+    .field span {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .field select,
+    .funding-amount-input {
+      width: 100%;
+      border: 1px solid rgba(46, 32, 14, 0.12);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.88);
+      color: var(--text);
+      padding: 10px 12px;
+      font: inherit;
+    }
+
+    .segmented {
+      display: inline-flex;
+      width: 100%;
+      padding: 4px;
+      border-radius: 999px;
+      background: rgba(46, 32, 14, 0.06);
+      border: 1px solid rgba(46, 32, 14, 0.08);
+      gap: 4px;
+    }
+
+    .segment-button {
+      flex: 1 1 0;
+      border: 0;
+      border-radius: 999px;
+      background: transparent;
+      color: var(--muted);
+      padding: 10px 14px;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .segment-button.is-active {
+      background: rgba(255, 255, 255, 0.96);
+      color: var(--text);
+      box-shadow: 0 10px 24px rgba(36, 27, 18, 0.08);
+    }
+
+    .modal-status,
+    .modal-feedback {
+      min-height: 20px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .modal-status.is-error,
+    .modal-feedback.is-error {
+      color: var(--bad);
+    }
+
+    .modal-status.is-success,
+    .modal-feedback.is-success {
+      color: var(--good);
+    }
+
+    .funding-main-card {
+      padding: 16px 18px;
+      border: 1px solid rgba(46, 32, 14, 0.08);
+      border-radius: 22px;
+      background: rgba(255, 255, 255, 0.74);
+      display: grid;
+      gap: 10px;
+    }
+
+    .funding-main-card-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .funding-main-card h3 {
+      margin: 0;
+      font-size: 18px;
+    }
+
+    .funding-main-grid {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    }
+
+    .funding-stat {
+      border: 1px solid rgba(46, 32, 14, 0.08);
+      border-radius: 18px;
+      padding: 12px 14px;
+      background: rgba(255, 255, 255, 0.82);
+    }
+
+    .funding-list-wrap {
+      border: 1px solid rgba(46, 32, 14, 0.08);
+      border-radius: 22px;
+      background: rgba(255, 255, 255, 0.78);
+      overflow: hidden;
+    }
+
+    .funding-table {
+      table-layout: auto;
+    }
+
+    .funding-table th,
+    .funding-table td {
+      vertical-align: middle;
+      white-space: nowrap;
+    }
+
+    .funding-table td:last-child {
+      white-space: normal;
+    }
+
+    .funding-table tbody tr.is-disabled {
+      opacity: 0.58;
+    }
+
+    .funding-amount-input:disabled,
+    .funding-table input[type="checkbox"]:disabled {
+      cursor: not-allowed;
+      opacity: 0.65;
+    }
+
+    .modal-actions {
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-left: auto;
+    }
+
     .card-note {
       margin-top: 8px;
       color: var(--muted);
@@ -508,6 +745,23 @@
         padding: 14px 16px;
         font-size: 18px;
       }
+      .modal-shell {
+        padding: 12px;
+      }
+      .modal-panel {
+        width: min(100vw - 12px, 1080px);
+        max-height: min(100vh - 12px, 920px);
+      }
+      .modal-head,
+      .modal-body,
+      .modal-foot {
+        padding-left: 16px;
+        padding-right: 16px;
+      }
+      .funding-table th,
+      .funding-table td {
+        white-space: normal;
+      }
       table { display: block; overflow-x: auto; }
     }
   </style>
@@ -525,6 +779,7 @@
                 <input type="checkbox" id="monitorToggle" checked>
                 <span class="switch-track" aria-hidden="true"></span>
               </label>
+              <button class="refresh-button" id="fundingTransferButton" type="button">资金归集</button>
               <button class="refresh-button" id="downloadTemplateButton" type="button">下载模板</button>
               <button class="refresh-button" id="importButton" type="button">导入 Excel</button>
             </div>
@@ -551,6 +806,62 @@
     <section class="groups" id="groupsContainer"></section>
   </main>
 
+  <div class="modal-shell hidden" id="fundingModalShell">
+    <div class="modal-backdrop" data-close-funding-modal="true"></div>
+    <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="fundingModalTitle">
+      <div class="modal-head">
+        <div>
+          <h2 id="fundingModalTitle">资金归集与分发</h2>
+          <p class="modal-subtitle" id="fundingModalSubtitle">在主账号与子账号之间执行 Funding 资金划转</p>
+        </div>
+        <button class="modal-close" id="fundingModalClose" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-controls">
+          <label class="field">
+            <span>分组</span>
+            <select id="fundingGroupSelect"></select>
+          </label>
+          <div class="field">
+            <span>方向</span>
+            <div class="segmented">
+              <button class="segment-button is-active" id="fundingModeDistribute" type="button" data-funding-mode="distribute">主账号分发</button>
+              <button class="segment-button" id="fundingModeCollect" type="button" data-funding-mode="collect">子账号归集</button>
+            </div>
+          </div>
+          <label class="field">
+            <span>代币</span>
+            <select id="fundingAssetSelect"></select>
+          </label>
+        </div>
+        <div class="modal-status" id="fundingCapabilityMessage"></div>
+        <div class="funding-main-card" id="fundingMainSummary"></div>
+        <div class="funding-list-wrap">
+          <table class="funding-table">
+            <thead>
+              <tr>
+                <th>选择</th>
+                <th>子账号</th>
+                <th>UID</th>
+                <th>Funding 可用</th>
+                <th>分发金额</th>
+                <th>可用状态</th>
+              </tr>
+            </thead>
+            <tbody id="fundingRows"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <div class="modal-feedback" id="fundingFeedback"></div>
+        <div class="modal-actions">
+          <button class="refresh-button" id="fundingCancelButton" type="button">取消</button>
+          <button class="refresh-button" id="fundingSubmitButton" type="button">提交</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
   <script>
     const summaryCards = document.getElementById('summaryCards');
     const profitCards = document.getElementById('profitCards');
@@ -563,7 +874,20 @@
     const downloadTemplateButton = document.getElementById('downloadTemplateButton');
     const refreshButton = document.getElementById('refreshButton');
     const importButton = document.getElementById('importButton');
+    const fundingTransferButton = document.getElementById('fundingTransferButton');
     const importInput = document.getElementById('importInput');
+    const fundingModalShell = document.getElementById('fundingModalShell');
+    const fundingModalClose = document.getElementById('fundingModalClose');
+    const fundingGroupSelect = document.getElementById('fundingGroupSelect');
+    const fundingModeDistribute = document.getElementById('fundingModeDistribute');
+    const fundingModeCollect = document.getElementById('fundingModeCollect');
+    const fundingAssetSelect = document.getElementById('fundingAssetSelect');
+    const fundingCapabilityMessage = document.getElementById('fundingCapabilityMessage');
+    const fundingMainSummary = document.getElementById('fundingMainSummary');
+    const fundingRows = document.getElementById('fundingRows');
+    const fundingFeedback = document.getElementById('fundingFeedback');
+    const fundingCancelButton = document.getElementById('fundingCancelButton');
+    const fundingSubmitButton = document.getElementById('fundingSubmitButton');
     const query = new URLSearchParams(window.location.search);
     const accountIds = query.get('account_ids');
     const groupsUrl = accountIds ? `/api/monitor/groups?account_ids=${encodeURIComponent(accountIds)}` : '/api/monitor/groups';
@@ -574,6 +898,12 @@
     let refreshCooldownSeconds = 0;
     let refreshCooldownTimer = null;
     let latestPayload = null;
+    let fundingModalBusy = false;
+    let fundingOverview = null;
+    let fundingDirection = 'distribute';
+    let fundingSelectedGroupId = '';
+    let fundingSelectedAsset = '';
+    let fundingSelectionState = {};
     const groupExpandedState = {};
     const groupSelectedAccountState = {};
 
@@ -687,6 +1017,8 @@
       refreshButton.disabled = importBusy || refreshBusy || refreshCooldownSeconds > 0;
       importButton.textContent = importBusy ? '导入中' : '导入 Excel';
       importButton.disabled = importBusy || refreshBusy || toggleBusy;
+      fundingTransferButton.disabled = importBusy || refreshBusy || toggleBusy || currentGroups().length === 0;
+      fundingSubmitButton.disabled = fundingModalBusy;
     }
 
     function startRefreshCooldown(seconds = 30) {
@@ -740,6 +1072,23 @@
         <article class="card">
           <div class="label">${label}</div>
           <div class="value ${tone}">${value}</div>
+          <div class="section">
+            <h4>Funding 资产</h4>
+            ${renderRows(
+              ['资产', '可用余额', '锁定', '冻结', '提现中', '总额'],
+              account.funding_assets || [],
+              (row) => `
+                <tr>
+                  <td class="mono">${escapeHtml(row.asset || '-')}</td>
+                  <td>${fmt(row.free)}</td>
+                  <td>${fmt(row.locked)}</td>
+                  <td>${fmt(row.freeze)}</td>
+                  <td>${fmt(row.withdrawing)}</td>
+                  <td>${fmt(row.total)}</td>
+                </tr>
+              `
+            )}
+          </div>
         </article>
       `).join('');
     }
@@ -799,6 +1148,267 @@
 
     function currentGroups() {
       return Array.isArray(latestPayload?.groups) ? latestPayload.groups : [];
+    }
+
+    function fundingGroupOptions() {
+      return currentGroups().map((group) => ({
+        id: String(group.main_account_id || ''),
+        name: String(group.main_account_name || group.main_account_id || '-'),
+      })).filter((group) => group.id);
+    }
+
+    function fundingRowState(accountId) {
+      if (!fundingSelectionState[accountId]) {
+        fundingSelectionState[accountId] = { checked: false, amount: '' };
+      }
+      return fundingSelectionState[accountId];
+    }
+
+    function resetFundingSelectionState() {
+      fundingSelectionState = {};
+      const children = Array.isArray(fundingOverview?.children) ? fundingOverview.children : [];
+      children.forEach((child) => {
+        fundingSelectionState[String(child.account_id || '')] = { checked: false, amount: '' };
+      });
+    }
+
+    function setFundingMessage(target, message, tone = '') {
+      target.textContent = message || '';
+      target.className = tone ? `${target.id === 'fundingFeedback' ? 'modal-feedback' : 'modal-status'} ${tone}` : (target.id === 'fundingFeedback' ? 'modal-feedback' : 'modal-status');
+    }
+
+    function fundingAssetValue(row) {
+      const asset = String(fundingSelectedAsset || '');
+      if (!asset) {
+        return '0';
+      }
+      return row?.funding_available?.[asset] || '0';
+    }
+
+    function renderFundingMainSummary() {
+      const mainAccount = fundingOverview?.main_account || {};
+      const asset = fundingSelectedAsset || '-';
+      const available = fundingAssetValue(mainAccount);
+      fundingMainSummary.innerHTML = `
+        <div class="funding-main-card-head">
+          <div>
+            <h3>${escapeHtml(fundingOverview?.main_account_name || fundingSelectedGroupId || '-')}</h3>
+            <div class="mono">${escapeHtml(String(mainAccount.uid || '-'))}</div>
+          </div>
+          <div class="badge ${mainAccount.transfer_ready ? 'status-ok' : 'status-error'}">
+            ${escapeHtml(mainAccount.transfer_ready ? '可操作' : '不可用')}
+          </div>
+        </div>
+        <div class="funding-main-grid">
+          <div class="funding-stat">
+            <div class="label">当前代币</div>
+            <div class="value">${escapeHtml(asset)}</div>
+          </div>
+          <div class="funding-stat">
+            <div class="label">主账号 Funding 可用</div>
+            <div class="value">${fmt(available)}</div>
+          </div>
+          <div class="funding-stat">
+            <div class="label">归集 API 状态</div>
+            <div class="value">${escapeHtml(mainAccount.transfer_ready ? '已配置' : (mainAccount.reason || '未配置'))}</div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderFundingRows() {
+      const rows = Array.isArray(fundingOverview?.children) ? fundingOverview.children : [];
+      const distributeMode = fundingDirection === 'distribute';
+      fundingRows.innerHTML = rows.length
+        ? rows.map((row) => {
+            const accountId = String(row.account_id || '');
+            const rowState = fundingRowState(accountId);
+            const eligible = Boolean(row.eligible);
+            const checkboxDisabled = !eligible || fundingModalBusy;
+            const amountDisabled = !distributeMode || checkboxDisabled || !rowState.checked;
+            return `
+              <tr class="${eligible ? '' : 'is-disabled'}">
+                <td>
+                  <input
+                    type="checkbox"
+                    data-funding-account-id="${escapeHtml(accountId)}"
+                    ${rowState.checked ? 'checked' : ''}
+                    ${checkboxDisabled ? 'disabled' : ''}
+                  >
+                </td>
+                <td>
+                  <div>${escapeHtml(row.name || accountId)}</div>
+                  <div class="mono">${escapeHtml(accountId)}</div>
+                </td>
+                <td class="mono">${escapeHtml(row.uid || '-')}</td>
+                <td>${fmt(fundingAssetValue(row))}</td>
+                <td>
+                  <input
+                    class="funding-amount-input"
+                    type="number"
+                    min="0"
+                    step="0.00000001"
+                    placeholder="${distributeMode ? '输入金额' : '归集模式自动全额'}"
+                    data-funding-amount-id="${escapeHtml(accountId)}"
+                    value="${escapeHtml(rowState.amount || '')}"
+                    ${amountDisabled ? 'disabled' : ''}
+                  >
+                </td>
+                <td>${escapeHtml(eligible ? '可操作' : (row.reason || '不可用'))}</td>
+              </tr>
+            `;
+          }).join('')
+        : '<tr><td colspan="6" class="empty">当前分组暂无子账号</td></tr>';
+    }
+
+    function renderFundingModal() {
+      const groups = fundingGroupOptions();
+      const selectedGroupId = fundingSelectedGroupId || groups[0]?.id || '';
+      fundingSelectedGroupId = selectedGroupId;
+      fundingGroupSelect.innerHTML = groups.map((group) => `
+        <option value="${escapeHtml(group.id)}" ${group.id === selectedGroupId ? 'selected' : ''}>${escapeHtml(group.name)}</option>
+      `).join('');
+
+      const assets = Array.isArray(fundingOverview?.assets) ? fundingOverview.assets : [];
+      if (!assets.includes(fundingSelectedAsset)) {
+        fundingSelectedAsset = assets[0] || '';
+      }
+      fundingAssetSelect.innerHTML = assets.length
+        ? assets.map((asset) => `<option value="${escapeHtml(asset)}" ${asset === fundingSelectedAsset ? 'selected' : ''}>${escapeHtml(asset)}</option>`).join('')
+        : '<option value="">暂无可用代币</option>';
+
+      fundingModeDistribute.classList.toggle('is-active', fundingDirection === 'distribute');
+      fundingModeCollect.classList.toggle('is-active', fundingDirection === 'collect');
+      setFundingMessage(
+        fundingCapabilityMessage,
+        fundingOverview?.available ? '当前分组可执行 Funding 分发与归集。' : (fundingOverview?.reason || '当前分组暂无可用归集能力'),
+        fundingOverview?.available ? 'is-success' : 'is-error'
+      );
+      renderFundingMainSummary();
+      renderFundingRows();
+      fundingSubmitButton.textContent = fundingDirection === 'distribute' ? '执行分发' : '执行归集';
+      fundingSubmitButton.disabled = fundingModalBusy || !fundingOverview?.available || !fundingSelectedAsset;
+    }
+
+    async function loadFundingOverview(mainAccountId, { resetState = false } = {}) {
+      if (!mainAccountId) {
+        fundingOverview = null;
+        return;
+      }
+      fundingModalBusy = true;
+      applyActionButtonState();
+      setFundingMessage(fundingFeedback, '');
+      try {
+        const response = await fetch(`/api/funding/groups/${encodeURIComponent(mainAccountId)}`, { cache: 'no-store' });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.detail || `HTTP ${response.status}`);
+        }
+        fundingSelectedGroupId = mainAccountId;
+        fundingOverview = payload;
+        if (resetState) {
+          resetFundingSelectionState();
+        }
+        renderFundingModal();
+      } catch (error) {
+        fundingOverview = {
+          main_account_id: mainAccountId,
+          main_account_name: mainAccountId,
+          available: false,
+          reason: String(error),
+          assets: [],
+          main_account: { uid: '', transfer_ready: false, reason: String(error), funding_assets: [], funding_available: {} },
+          children: [],
+        };
+        resetFundingSelectionState();
+        renderFundingModal();
+      } finally {
+        fundingModalBusy = false;
+        applyActionButtonState();
+        renderFundingModal();
+      }
+    }
+
+    function openFundingModal() {
+      const groups = fundingGroupOptions();
+      fundingSelectedGroupId = fundingSelectedGroupId || groups[0]?.id || '';
+      fundingSelectedAsset = '';
+      fundingDirection = 'distribute';
+      fundingModalShell.classList.remove('hidden');
+      document.body.style.overflow = 'hidden';
+      loadFundingOverview(fundingSelectedGroupId, { resetState: true });
+    }
+
+    function closeFundingModal() {
+      fundingModalShell.classList.add('hidden');
+      document.body.style.overflow = '';
+      fundingModalBusy = false;
+      setFundingMessage(fundingFeedback, '');
+    }
+
+    async function refreshMonitorAfterFundingOperation() {
+      try {
+        const response = await fetch('/api/monitor/refresh', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        render(await response.json());
+      } catch (error) {
+        messageText.textContent = `资金操作后刷新监控失败：${error}`;
+      }
+    }
+
+    async function submitFundingOperation() {
+      if (fundingModalBusy || !fundingOverview || !fundingSelectedGroupId) {
+        return;
+      }
+
+      const selectedRows = Object.entries(fundingSelectionState)
+        .filter(([, state]) => Boolean(state.checked))
+        .map(([accountId, state]) => ({ account_id: accountId, amount: state.amount || '' }));
+      if (fundingDirection === 'distribute' && !selectedRows.some((row) => Number(row.amount) > 0)) {
+        setFundingMessage(fundingFeedback, '请至少勾选一个子账号并填写大于 0 的分发金额。', 'is-error');
+        return;
+      }
+      if (fundingDirection === 'collect' && selectedRows.length === 0) {
+        setFundingMessage(fundingFeedback, '请至少勾选一个需要归集的子账号。', 'is-error');
+        return;
+      }
+
+      fundingModalBusy = true;
+      applyActionButtonState();
+      setFundingMessage(fundingFeedback, fundingDirection === 'distribute' ? '正在执行 Funding 分发…' : '正在执行 Funding 归集…');
+      try {
+        const endpoint = fundingDirection === 'distribute'
+          ? `/api/funding/groups/${encodeURIComponent(fundingSelectedGroupId)}/distribute`
+          : `/api/funding/groups/${encodeURIComponent(fundingSelectedGroupId)}/collect`;
+        const body = fundingDirection === 'distribute'
+          ? { asset: fundingSelectedAsset, transfers: selectedRows }
+          : { asset: fundingSelectedAsset, account_ids: selectedRows.map((row) => row.account_id) };
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.detail || `HTTP ${response.status}`);
+        }
+        fundingOverview = payload.overview || fundingOverview;
+        resetFundingSelectionState();
+        renderFundingModal();
+        setFundingMessage(fundingFeedback, payload.message || '操作完成', payload.results?.every((row) => row.success) ? 'is-success' : 'is-error');
+        await refreshMonitorAfterFundingOperation();
+      } catch (error) {
+        setFundingMessage(fundingFeedback, `资金操作失败：${error}`, 'is-error');
+      } finally {
+        fundingModalBusy = false;
+        applyActionButtonState();
+        renderFundingModal();
+      }
     }
 
     function findGroupByMainId(mainAccountId) {
@@ -1266,6 +1876,83 @@
           return;
         }
         uploadExcel(file);
+      });
+
+      fundingTransferButton.addEventListener('click', () => {
+        if (fundingTransferButton.disabled) {
+          return;
+        }
+        openFundingModal();
+      });
+
+      fundingModalClose.addEventListener('click', () => {
+        closeFundingModal();
+      });
+
+      fundingCancelButton.addEventListener('click', () => {
+        closeFundingModal();
+      });
+
+      fundingModalShell.addEventListener('click', (event) => {
+        if (event.target instanceof HTMLElement && event.target.dataset.closeFundingModal === 'true') {
+          closeFundingModal();
+        }
+      });
+
+      fundingGroupSelect.addEventListener('change', () => {
+        fundingSelectedGroupId = fundingGroupSelect.value;
+        fundingSelectedAsset = '';
+        loadFundingOverview(fundingSelectedGroupId, { resetState: true });
+      });
+
+      fundingModeDistribute.addEventListener('click', () => {
+        fundingDirection = 'distribute';
+        renderFundingModal();
+      });
+
+      fundingModeCollect.addEventListener('click', () => {
+        fundingDirection = 'collect';
+        renderFundingModal();
+      });
+
+      fundingAssetSelect.addEventListener('change', () => {
+        fundingSelectedAsset = fundingAssetSelect.value;
+        renderFundingModal();
+      });
+
+      fundingRows.addEventListener('input', (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) {
+          return;
+        }
+        if (target.matches('[data-funding-amount-id]')) {
+          const input = target;
+          const accountId = String(input.getAttribute('data-funding-amount-id') || '');
+          fundingRowState(accountId).amount = input.value;
+        }
+      });
+
+      fundingRows.addEventListener('change', (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLElement)) {
+          return;
+        }
+        if (target.matches('[data-funding-account-id]')) {
+          const checkbox = target;
+          const accountId = String(checkbox.getAttribute('data-funding-account-id') || '');
+          fundingRowState(accountId).checked = checkbox.checked;
+          renderFundingRows();
+        }
+      });
+
+      fundingSubmitButton.addEventListener('click', () => {
+        submitFundingOperation();
+      });
+
+      document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && !fundingModalShell.classList.contains('hidden')) {
+          closeFundingModal();
+        }
       });
 
       groupsContainer.addEventListener('click', (event) => {

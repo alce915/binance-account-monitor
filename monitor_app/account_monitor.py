@@ -374,6 +374,7 @@ class AccountMonitorController:
                 "totals": self._empty_totals(),
                 "positions": [],
                 "assets": [],
+                "funding_assets": [],
                 "income_summary": {
                     "window_days": self._settings.monitor_history_window_days,
                     "records": 0,

@@ -18,18 +18,23 @@ def test_load_monitor_accounts_from_hierarchical_file(tmp_path: Path, monkeypatc
                     {
                         "main_id": "group_a",
                         "name": "Group A",
+                        "transfer_api_key": "main-k",
+                        "transfer_api_secret": "main-s",
+                        "transfer_uid": "123456789",
                         "children": [
                             {
                                 "account_id": "sub1",
                                 "name": "Sub One",
                                 "api_key": "k1",
                                 "api_secret": "s1",
+                                "uid": "223456789",
                             },
                             {
                                 "account_id": "sub2",
                                 "name": "Sub Two",
                                 "api_key": "k2",
                                 "api_secret": "s2",
+                                "uid": "323456789",
                                 "use_testnet": True,
                             },
                         ],
@@ -46,8 +51,10 @@ def test_load_monitor_accounts_from_hierarchical_file(tmp_path: Path, monkeypatc
 
     assert set(settings.monitor_accounts) == {"group_a.sub1", "group_a.sub2"}
     assert settings.monitor_accounts["group_a.sub1"].display_name == "Group A / Sub One"
+    assert settings.monitor_accounts["group_a.sub1"].uid == "223456789"
     assert settings.monitor_accounts["group_a.sub2"].use_testnet is True
     assert settings.monitor_main_accounts["group_a"].name == "Group A"
+    assert settings.monitor_main_accounts["group_a"].has_transfer_credentials is True
 
 
 def test_load_monitor_accounts_rejects_duplicate_main_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

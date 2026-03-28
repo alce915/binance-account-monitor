@@ -7,6 +7,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from monitor_app.account_monitor import AccountMonitorController
@@ -17,28 +18,48 @@ from monitor_app.account_import import (
     write_monitor_accounts_payload,
 )
 from monitor_app.config import settings
+from monitor_app.funding_transfer import FundingTransferError, FundingTransferService
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     monitor = AccountMonitorController(settings)
+    funding_transfer = FundingTransferService(settings)
     app.state.monitor = monitor
+    app.state.funding_transfer = funding_transfer
     try:
         yield
     finally:
+        await funding_transfer.close()
         await monitor.close()
 
 
 app = FastAPI(title=settings.monitor_app_name, lifespan=lifespan)
+app.mount("/static", StaticFiles(directory=Path(__file__).with_name("static")), name="static")
 
 
 class MonitorControlRequest(BaseModel):
     enabled: bool
 
 
+class FundingDistributeItem(BaseModel):
+    account_id: str
+    amount: str
+
+
+class FundingDistributeRequest(BaseModel):
+    asset: str
+    transfers: list[FundingDistributeItem]
+
+
+class FundingCollectRequest(BaseModel):
+    asset: str
+    account_ids: list[str]
+
+
 @app.get("/", include_in_schema=False)
 async def index() -> FileResponse:
-    return FileResponse(Path(__file__).with_name("static").joinpath("monitor.html"))
+    return FileResponse(Path(__file__).with_name("static").joinpath("monitor_v2.html"))
 
 
 @app.get("/healthz")
@@ -101,6 +122,41 @@ async def import_monitor_accounts_excel(file: UploadFile = File(...)) -> dict:
     else:
         response["message"] = "Excel 导入成功，但刷新失败"
     return response
+
+
+@app.get("/api/funding/groups/{main_id}")
+async def get_funding_group(main_id: str) -> dict:
+    funding_transfer: FundingTransferService = app.state.funding_transfer
+    try:
+        return await funding_transfer.get_group_overview(main_id)
+    except FundingTransferError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/funding/groups/{main_id}/distribute")
+async def distribute_group_funding(main_id: str, payload: FundingDistributeRequest) -> dict:
+    funding_transfer: FundingTransferService = app.state.funding_transfer
+    try:
+        return await funding_transfer.distribute(
+            main_id,
+            asset=payload.asset,
+            transfers=[item.model_dump() for item in payload.transfers],
+        )
+    except FundingTransferError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/funding/groups/{main_id}/collect")
+async def collect_group_funding(main_id: str, payload: FundingCollectRequest) -> dict:
+    funding_transfer: FundingTransferService = app.state.funding_transfer
+    try:
+        return await funding_transfer.collect(
+            main_id,
+            asset=payload.asset,
+            account_ids=payload.account_ids,
+        )
+    except FundingTransferError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/api/config/import/excel-template")
