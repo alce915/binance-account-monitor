@@ -822,7 +822,7 @@
 
         validMainIds.add(mainAccountId);
         if (!(mainAccountId in groupExpandedState)) {
-          groupExpandedState[mainAccountId] = true;
+          groupExpandedState[mainAccountId] = false;
         }
 
         const accounts = Array.isArray(group.accounts) ? group.accounts : [];
@@ -846,7 +846,7 @@
     }
 
     function isGroupExpanded(mainAccountId) {
-      return groupExpandedState[mainAccountId] !== false;
+      return groupExpandedState[mainAccountId] === true;
     }
 
     function resolveSelectedAccount(group) {
