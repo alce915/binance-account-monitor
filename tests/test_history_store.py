@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -274,7 +276,7 @@ async def test_history_store_tracks_source_success_and_failure_state(tmp_path: P
         await store.record_source_failure(
             "group_a.sub1",
             "distribution",
-            error_summary="temporary network error",
+            error_summary="temporary network error email foo@example.com token=abc uid 223456789",
             failed_at_ms=1700000001000,
         )
         failed = await store.get_source_status("group_a.sub1", "distribution")
@@ -290,7 +292,184 @@ async def test_history_store_tracks_source_success_and_failure_state(tmp_path: P
 
     assert failed["consecutive_failures"] == 1
     assert failed["last_failed_at_ms"] == 1700000001000
-    assert failed["last_error_summary"] == "temporary network error"
+    assert failed["last_error_summary"] == "temporary network error email [redacted-email] token=[redacted] UID 2234***89"
     assert succeeded["consecutive_failures"] == 0
     assert succeeded["last_failed_at_ms"] is None
     assert succeeded["last_successful_end_time"] == 1700000002000
+
+
+@pytest.mark.asyncio
+async def test_history_store_persists_minimized_payload_json(tmp_path: Path) -> None:
+    db_path = tmp_path / "history.db"
+    store = MonitorHistoryStore(db_path)
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
+
+    try:
+        await store.record_history_batch(
+            "group_a.sub1",
+            "income",
+            [
+                HistoryEvent(
+                    source="income",
+                    event_time_ms=now_ms,
+                    unique_key="income-1234567890",
+                    asset="USDT",
+                    amount=Decimal("5.2"),
+                    event_type="COMMISSION",
+                    payload={
+                        "income": "5.2",
+                        "symbol": "BTCUSDT",
+                        "email": "foo@example.com",
+                        "token": "abc",
+                        "orderId": "1234567890123",
+                    },
+                ),
+            ],
+            last_successful_end_time=now_ms,
+            retain_after_ms=None,
+        )
+    finally:
+        await store.close()
+
+    conn = sqlite3.connect(db_path)
+    try:
+        row = conn.execute("SELECT payload_json FROM history_events").fetchone()
+    finally:
+        conn.close()
+
+    payload = json.loads(row[0])
+    assert payload["source"] == "income"
+    assert payload["asset"] == "USDT"
+    assert payload["amount"] == "5.2"
+    assert payload["event_type"] == "COMMISSION"
+    assert payload["symbol"] == "BTCUSDT"
+    assert "email" not in payload
+    assert "token" not in payload
+    assert payload["reference"].startswith("1234")
+    assert "*" in payload["reference"]
+
+
+@pytest.mark.asyncio
+async def test_history_store_migrates_existing_payloads_and_error_summaries(tmp_path: Path) -> None:
+    db_path = tmp_path / "history.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE history_events (
+                account_id TEXT NOT NULL,
+                source TEXT NOT NULL,
+                event_time_ms INTEGER NOT NULL,
+                unique_key TEXT NOT NULL,
+                asset TEXT NOT NULL,
+                amount TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                PRIMARY KEY (account_id, source, unique_key)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE fetch_state (
+                account_id TEXT NOT NULL,
+                source TEXT NOT NULL,
+                last_successful_end_time INTEGER NOT NULL,
+                PRIMARY KEY (account_id, source)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE mark_prices (
+                symbol TEXT PRIMARY KEY,
+                mark_price TEXT NOT NULL,
+                updated_at_ms INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE distribution_backfill_state (
+                account_id TEXT PRIMARY KEY,
+                completed INTEGER NOT NULL DEFAULT 0,
+                updated_at_ms INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE history_source_status (
+                account_id TEXT NOT NULL,
+                source TEXT NOT NULL,
+                last_success_at_ms INTEGER,
+                last_successful_end_time INTEGER,
+                last_failed_at_ms INTEGER,
+                consecutive_failures INTEGER NOT NULL DEFAULT 0,
+                last_error_summary TEXT,
+                PRIMARY KEY (account_id, source)
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO history_events (account_id, source, event_time_ms, unique_key, asset, amount, event_type, payload_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "group_a.sub1",
+                "income",
+                1700000000000,
+                "income-1234567890",
+                "USDT",
+                "7.8",
+                "COMMISSION",
+                json.dumps(
+                    {
+                        "symbol": "ETHUSDT",
+                        "email": "foo@example.com",
+                        "token": "abc",
+                        "tranId": "1234567890123",
+                    }
+                ),
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO history_source_status (account_id, source, last_failed_at_ms, consecutive_failures, last_error_summary)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                "group_a.sub1",
+                "income",
+                1700000001000,
+                1,
+                "token=abc email foo@example.com uid 223456789",
+            ),
+        )
+        conn.execute("PRAGMA user_version=0")
+        conn.commit()
+    finally:
+        conn.close()
+
+    store = MonitorHistoryStore(db_path)
+    try:
+        status = await store.get_source_status("group_a.sub1", "income")
+    finally:
+        await store.close()
+
+    conn = sqlite3.connect(db_path)
+    try:
+        payload_row = conn.execute("SELECT payload_json FROM history_events").fetchone()
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+    finally:
+        conn.close()
+
+    payload = json.loads(payload_row[0])
+    assert version == 2
+    assert payload["symbol"] == "ETHUSDT"
+    assert "email" not in payload
+    assert "token" not in payload
+    assert payload["reference"].startswith("1234")
+    assert "*" in payload["reference"]
+    assert status["last_error_summary"] == "token=[redacted] email [redacted-email] UID 2234***89"

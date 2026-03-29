@@ -11,12 +11,15 @@ class FakeFundingService:
             "main_account_id": main_id,
             "main_account_name": "Group A",
             "available": True,
-            "reason": "",
+            "reason": "Main UID 123456789 email main@example.com token=abc",
             "assets": ["USDT"],
+            "request_id": "req-123",
+            "timings": {"total_ms": 12},
+            "error_context": {"main_account_query": {"message": "email=main@example.com"}},
             "main_account": {
                 "uid": "123456789",
                 "transfer_ready": True,
-                "reason": "",
+                "reason": "UID 123456789 email main@example.com",
                 "spot_assets": [{"asset": "USDT", "free": "100", "locked": "0", "total": "100"}],
                 "spot_available": {"USDT": "100"},
                 "funding_assets": [{"asset": "USDT", "free": "100", "locked": "0", "total": "100"}],
@@ -29,11 +32,11 @@ class FakeFundingService:
                     "name": "Sub One",
                     "uid": "223456789",
                     "eligible": True,
-                    "reason": "",
+                    "reason": "UID 223456789 email child@example.com",
                     "can_distribute": True,
                     "can_collect": True,
-                    "reason_distribute": "",
-                    "reason_collect": "",
+                    "reason_distribute": "UID 223456789 email child@example.com token=child",
+                    "reason_collect": "UID 223456789 email child@example.com token=child",
                     "spot_assets": [{"asset": "USDT", "free": "8", "locked": "0", "total": "8"}],
                     "spot_available": {"USDT": "8"},
                     "funding_assets": [{"asset": "USDT", "free": "8", "locked": "0", "total": "8"}],
@@ -65,6 +68,7 @@ class FakeFundingService:
 
 def test_get_funding_group_endpoint_returns_overview() -> None:
     with TestClient(api_module.app) as client:
+        client.app.state.allow_test_non_loopback = True
         client.app.state.funding_transfer = FakeFundingService()
         response = client.get("/api/funding/groups/group_a")
 
@@ -73,10 +77,22 @@ def test_get_funding_group_endpoint_returns_overview() -> None:
     assert payload["main_account_id"] == "group_a"
     assert payload["available"] is True
     assert payload["assets"] == ["USDT"]
+    assert "request_id" not in payload
+    assert "timings" not in payload
+    assert "error_context" not in payload
+    assert payload["main_account"]["uid"] == "1234***89"
+    assert payload["children"][0]["uid"] == "2234***89"
+    assert "main@example.com" not in str(payload)
+    assert "child@example.com" not in str(payload)
+    assert "123456789" not in str(payload)
+    assert "223456789" not in str(payload)
+    assert "[redacted-email]" in payload["reason"]
+    assert "[redacted]" in payload["children"][0]["reason_distribute"]
 
 
 def test_distribute_group_funding_endpoint_returns_operation_result() -> None:
     with TestClient(api_module.app) as client:
+        client.app.state.allow_test_non_loopback = True
         client.app.state.funding_transfer = FakeFundingService()
         response = client.post(
             "/api/funding/groups/group_a/distribute",
@@ -87,10 +103,15 @@ def test_distribute_group_funding_endpoint_returns_operation_result() -> None:
     payload = response.json()
     assert payload["direction"] == "distribute"
     assert payload["results"][0]["success"] is True
+    assert payload["overview"]["main_account"]["uid"] == "1234***89"
+    assert "request_id" not in payload
+    assert "timings" not in payload
+    assert "error_context" not in payload
 
 
 def test_collect_group_funding_endpoint_returns_operation_result() -> None:
     with TestClient(api_module.app) as client:
+        client.app.state.allow_test_non_loopback = True
         client.app.state.funding_transfer = FakeFundingService()
         response = client.post(
             "/api/funding/groups/group_a/collect",
@@ -102,10 +123,12 @@ def test_collect_group_funding_endpoint_returns_operation_result() -> None:
     assert payload["direction"] == "collect"
     assert payload["results"][0]["account_id"] == "group_a.sub1"
     assert payload["results"][0]["amount"] == "6.5"
+    assert payload["overview"]["children"][0]["uid"] == "2234***89"
 
 
 def test_collect_group_funding_endpoint_accepts_legacy_account_ids_payload() -> None:
     with TestClient(api_module.app) as client:
+        client.app.state.allow_test_non_loopback = True
         client.app.state.funding_transfer = FakeFundingService()
         response = client.post(
             "/api/funding/groups/group_a/collect",

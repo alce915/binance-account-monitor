@@ -90,7 +90,7 @@ function baseFundingOverview(overrides = {}) {
         account_id: 'group_a.sub1',
         child_account_id: 'sub1',
         name: 'Sub 1',
-        uid: 'uid-1',
+        uid: '223456789',
         can_distribute: true,
         can_collect: true,
         reason_distribute: '',
@@ -204,6 +204,23 @@ describe('monitor_v2.js', () => {
     expect(entries[0].message).toBe('log 304');
     expect(entries.at(-1).message).toBe('log 5');
   }, 15000);
+
+  it('renders masked UIDs in the funding modal', () => {
+    const app = createApp();
+    apps.push(app);
+    app.api.resetTestState();
+    app.api.setLatestPayload(basePayload());
+    app.api.setFundingOverview(baseFundingOverview());
+    app.api.setFundingSelectedGroupId('group_a');
+    app.api.setFundingSelectedAsset('BNB');
+    app.api.renderFundingModal();
+
+    const text = app.document.body.textContent;
+    expect(text).toContain('1313**77');
+    expect(text).toContain('2234***89');
+    expect(text).not.toContain('13133777');
+    expect(text).not.toContain('223456789');
+  });
 
   it('refreshes funding overview and writes success and failure logs', async () => {
     const app = createApp();

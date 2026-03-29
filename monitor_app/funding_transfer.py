@@ -15,6 +15,7 @@ from uuid import uuid4
 import httpx
 
 from monitor_app.config import MainAccountConfig, MonitorAccountConfig, Settings
+from monitor_app.security import mask_uid, sanitize_error_summary, sanitize_text
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -89,13 +90,13 @@ class FundingTransferService:
                 main_spot_assets = await self._fetch_spot_assets(self._main_credentials(main_account))
                 timings["main_spot_query_ms"] = int((perf_counter() - main_spot_started_at) * 1000)
             except Exception as exc:
-                main_reason = f"Main transfer API unavailable: {exc}"
+                main_reason = self._safe_failure_message(exc, "Main transfer API is unavailable for this group")
                 error_context["main_account_query"] = self._error_context_payload(exc)
                 logger.warning(
-                    "Funding overview main account query failed request_id=%s main_id=%s error=%s",
+                    "Funding overview main account query failed request_id=%s main_id=%s error_type=%s",
                     request_id,
                     main_account.main_id,
-                    exc,
+                    exc.__class__.__name__,
                 )
         else:
             main_reason = "Main transfer API is not configured for this group (Excel requires an account_id=main row)."
@@ -168,7 +169,7 @@ class FundingTransferService:
             timings["email_map_ms"] = int((perf_counter() - email_started_at) * 1000)
         except Exception as exc:
             error_context["email_map"] = self._error_context_payload(exc)
-            raise FundingTransferError(f"Failed to query sub-account email mapping: {exc}") from exc
+            raise FundingTransferError(self._safe_failure_message(exc, "Failed to query sub-account mapping")) from exc
 
         child_by_id = {child.account_id: child for child in main_account.children}
         main_credentials = self._main_credentials(main_account)
@@ -178,7 +179,7 @@ class FundingTransferService:
             timings["main_spot_query_ms"] = int((perf_counter() - main_spot_started_at) * 1000)
         except Exception as exc:
             error_context["main_spot_query"] = self._error_context_payload(exc)
-            raise FundingTransferError(f"Failed to query main account spot balances: {exc}") from exc
+            raise FundingTransferError(self._safe_failure_message(exc, "Failed to query main account spot balances")) from exc
 
         main_available = Decimal(self._spot_available_map(main_spot_assets).get(normalized_asset, "0"))
         executable: list[tuple[MonitorAccountConfig, str, Decimal]] = []
@@ -267,7 +268,7 @@ class FundingTransferService:
             timings["email_map_ms"] = int((perf_counter() - email_started_at) * 1000)
         except Exception as exc:
             error_context["email_map"] = self._error_context_payload(exc)
-            raise FundingTransferError(f"Failed to query sub-account email mapping: {exc}") from exc
+            raise FundingTransferError(self._safe_failure_message(exc, "Failed to query sub-account mapping")) from exc
 
         child_by_id = {child.account_id: child for child in main_account.children}
         main_credentials = self._main_credentials(main_account)
@@ -329,7 +330,7 @@ class FundingTransferService:
                     available_amount = await self._collectable_amount(child, normalized_asset)
                 except FundingTransferError as exc:
                     result = self._base_result(child, "0")
-                    result["message"] = str(exc)
+                    result["message"] = sanitize_error_summary(exc, fallback="Failed to query sub-account spot balances")
                     results.append(result)
                     continue
                 if available_amount <= Decimal("0"):
@@ -392,7 +393,7 @@ class FundingTransferService:
             try:
                 spot_assets = await self._fetch_spot_assets(self._child_credentials(child))
             except Exception as exc:
-                spot_reason = f"Spot balance query failed: {exc}"
+                spot_reason = self._safe_failure_message(exc, "Spot balance query failed")
                 error_context["spot_query"] = self._error_context_payload(exc)
         else:
             spot_reason = "Sub-account API is not configured"
@@ -403,7 +404,7 @@ class FundingTransferService:
         elif not child.uid:
             transfer_reason = "Sub-account UID is not configured"
         elif child.uid not in email_by_uid:
-            transfer_reason = "Main transfer API could not resolve an email for this UID"
+            transfer_reason = "Main transfer API could not resolve a sub-account mapping for this UID"
 
         can_distribute = transfer_reason == ""
         can_collect = transfer_reason == "" and spot_reason == ""
@@ -457,7 +458,7 @@ class FundingTransferService:
             result["success"] = True
             result["message"] = "Distribute succeeded"
         except Exception as exc:
-            result["message"] = f"Distribute failed: {exc}"
+            result["message"] = self._safe_failure_message(exc, "Distribute failed")
         return result
 
     async def _collect_from_child(
@@ -491,18 +492,16 @@ class FundingTransferService:
             result["success"] = True
             result["message"] = "Collect succeeded"
         except Exception as exc:
-            result["message"] = f"Collect failed: {exc}"
+            result["message"] = self._safe_failure_message(exc, "Collect failed")
         return result
 
     async def _collectable_amount(self, child: MonitorAccountConfig, asset: str) -> Decimal:
         if not child.api_key or not child.api_secret:
-            raise FundingTransferError(f"Sub-account {child.child_account_name or child.account_id} does not have API credentials configured")
+            raise FundingTransferError("Sub-account API credentials are not configured")
         try:
             child_spot_assets = await self._fetch_spot_assets(self._child_credentials(child))
         except Exception as exc:
-            raise FundingTransferError(
-                f"Failed to query spot balance for sub-account {child.child_account_name or child.account_id}: {exc}"
-            ) from exc
+            raise FundingTransferError(self._safe_failure_message(exc, "Failed to query sub-account spot balances")) from exc
         return Decimal(self._spot_available_map(child_spot_assets).get(asset, "0"))
 
     async def _get_sub_account_email_map(self, main_account: MainAccountConfig) -> dict[str, str]:
@@ -604,7 +603,7 @@ class FundingTransferService:
                 retryable = self._is_retryable_error(exc)
                 should_retry = retryable and attempt < max_attempts
                 logger.warning(
-                    "Funding read request failure label=%s attempt=%s/%s timeout_s=%s source=%s error_type=%s status_code=%s retry=%s error=%s",
+                    "Funding read request failure label=%s attempt=%s/%s timeout_s=%s source=%s error_type=%s status_code=%s retry=%s",
                     label,
                     attempt,
                     max_attempts,
@@ -613,11 +612,10 @@ class FundingTransferService:
                     error_type,
                     status_code,
                     should_retry,
-                    exc,
                 )
                 if not should_retry:
                     raise FundingTransferRequestError(
-                        f"{label} failed after {attempt} attempts: {self._format_request_exception(exc)}",
+                        self._safe_request_error_message(label, attempt, source=source, status_code=status_code),
                         label=label,
                         attempts=attempt,
                         duration_ms=int((perf_counter() - started_at) * 1000),
@@ -632,7 +630,7 @@ class FundingTransferService:
         assert last_error is not None
         source, error_type, status_code = self._classify_error(last_error)
         raise FundingTransferRequestError(
-            f"{label} failed after {max_attempts} attempts: {self._format_request_exception(last_error)}",
+            self._safe_request_error_message(label, max_attempts, source=source, status_code=status_code),
             label=label,
             attempts=max_attempts,
             duration_ms=int((perf_counter() - started_at) * 1000),
@@ -745,7 +743,7 @@ class FundingTransferService:
         if isinstance(exc, FundingTransferRequestError):
             return self._request_error_payload(exc)
         return {
-            "message": str(exc),
+            "message": sanitize_error_summary(exc, fallback="Funding request failed"),
             "error_type": exc.__class__.__name__,
         }
 
@@ -770,7 +768,9 @@ class FundingTransferService:
             raise FundingTransferError(f"Sub-account {child.account_id} does not have a configured UID")
         child_email = email_by_uid.get(child.uid)
         if not child_email:
-            raise FundingTransferError(f"Main transfer API could not resolve an email for UID {child.uid}")
+            raise FundingTransferError(
+                f"Main transfer API could not resolve a sub-account mapping for UID {mask_uid(child.uid)}"
+            )
         return child_email
 
     def _base_result(self, child: MonitorAccountConfig, amount_text: str) -> dict[str, Any]:
@@ -808,24 +808,39 @@ class FundingTransferService:
         return normalized or "0"
 
     def _extract_error_message(self, response: httpx.Response) -> str:
-        try:
-            payload = response.json()
-        except Exception:
-            payload = None
-        if isinstance(payload, dict):
-            message = str(payload.get("msg") or payload.get("message") or "").strip()
-            if message:
-                return f"Binance returned an error: {message}"
         return f"Binance returned an HTTP {response.status_code} error"
 
     def _format_request_exception(self, exc: Exception) -> str:
         if isinstance(exc, FundingTransferRequestError):
             return str(exc)
         if isinstance(exc, (httpx.TimeoutException, httpx.NetworkError)):
-            return f"Binance network request failed: {exc}"
+            return "Binance network request failed"
         if isinstance(exc, httpx.HTTPStatusError):
             return self._extract_error_message(exc.response)
-        return str(exc)
+        return sanitize_error_summary(exc, fallback="Funding request failed")
+
+    def _safe_failure_message(self, exc: Exception, default_message: str) -> str:
+        if isinstance(exc, FundingTransferRequestError):
+            if exc.source == "network":
+                return f"{default_message} (network issue)"
+            if exc.status_code is not None:
+                return f"{default_message} (HTTP {exc.status_code})"
+        if isinstance(exc, httpx.TimeoutException):
+            return f"{default_message} (network timeout)"
+        if isinstance(exc, httpx.NetworkError):
+            return f"{default_message} (network issue)"
+        if isinstance(exc, httpx.HTTPStatusError):
+            return f"{default_message} (HTTP {exc.response.status_code})"
+        return sanitize_error_summary(default_message, fallback="Funding request failed")
+
+    def _safe_request_error_message(self, label: str, attempts: int, *, source: str, status_code: int | None) -> str:
+        if source == "network":
+            suffix = "network issue"
+        elif status_code is not None:
+            suffix = f"HTTP {status_code}"
+        else:
+            suffix = "request failure"
+        return f"{label} failed after {attempts} attempts ({suffix})"
 
     def _operation_counts(self, results: list[dict[str, Any]]) -> tuple[int, int]:
         success_count = sum(1 for result in results if result.get("success"))

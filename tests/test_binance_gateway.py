@@ -9,7 +9,7 @@ from time import perf_counter
 import httpx
 import pytest
 
-from monitor_app.binance import BinanceMonitorGateway
+from monitor_app.binance import BinanceMonitorGateway, RetriedRequestError
 from monitor_app.config import MonitorAccountConfig, Settings
 from monitor_app.history_store import HistoryEvent
 
@@ -655,6 +655,47 @@ async def test_snapshot_marks_secondary_network_failures_as_fallback_sections(tm
     assert snapshot["section_errors"]["mark_prices"]["source"] == "network"
     assert snapshot["section_errors"]["mark_prices"]["request_error"]["label"] == "mark prices"
     assert "mark_prices" in snapshot["diagnostics"]["fallback_sections"]
+
+
+@pytest.mark.asyncio
+async def test_gateway_retry_logs_do_not_include_sensitive_exception_text(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    settings = Settings(_env_file=None, monitor_history_db_path=tmp_path / "history.db", binance_secondary_retry_attempts=1)
+    gateway = BinanceMonitorGateway(
+        settings,
+        MonitorAccountConfig(
+            account_id="group_a.sub1",
+            child_account_id="sub1",
+            child_account_name="Sub One",
+            main_account_id="group_a",
+            main_account_name="Group A",
+            api_key="k",
+            api_secret="s",
+        ),
+    )
+
+    async def failing_operation():
+        raise httpx.ReadTimeout(
+            "token=abc email child@example.com uid 223456789",
+            request=httpx.Request("GET", "https://example.com/papi/v1/account"),
+        )
+
+    try:
+        with caplog.at_level("WARNING", logger="uvicorn.error"):
+            with pytest.raises(RetriedRequestError):
+                await gateway._request_with_retry(
+                    label="core account",
+                    operation=failing_operation,
+                    max_attempts=1,
+                    retry_delays=(0,),
+                    timeout_s=1.2,
+                )
+    finally:
+        await gateway.close()
+
+    assert "token=abc" not in caplog.text
+    assert "child@example.com" not in caplog.text
+    assert "223456789" not in caplog.text
+    assert "error_type=ReadTimeout" in caplog.text
 
 
 @pytest.mark.asyncio

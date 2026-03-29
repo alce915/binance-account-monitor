@@ -110,7 +110,7 @@ async def test_get_group_overview_uses_structured_request_error_context_when_mai
         await service.close()
 
     assert overview["available"] is False
-    assert "Main transfer API unavailable" in overview["reason"]
+    assert overview["reason"] == "Main transfer API is unavailable for this group (network issue)"
     assert overview["error_context"]["main_account_query"] == {
         "label": "spot account",
         "attempts": 3,
@@ -194,6 +194,35 @@ async def test_signed_read_request_returns_structured_error_after_retry_exhauste
 
 
 @pytest.mark.asyncio
+async def test_signed_read_request_logs_do_not_include_sensitive_exception_text(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    child = _build_child("sub1", uid="223456789")
+    service = _build_service(tmp_path, children=(child,))
+
+    async def failing_operation():
+        raise httpx.ReadTimeout(
+            "token=abc email child@example.com uid 223456789",
+            request=httpx.Request("GET", "https://example.com/api/v3/account"),
+        )
+
+    try:
+        with caplog.at_level("WARNING", logger="uvicorn.error"):
+            with pytest.raises(FundingTransferRequestError):
+                await service._request_with_retry(
+                    failing_operation,
+                    label="spot account",
+                    timeout_s=1.2,
+                    max_attempts=1,
+                )
+    finally:
+        await service.close()
+
+    assert "token=abc" not in caplog.text
+    assert "child@example.com" not in caplog.text
+    assert "223456789" not in caplog.text
+    assert "error_type=ReadTimeout" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_distribute_runs_single_spot_transfer_from_main_to_child(tmp_path: Path) -> None:
     child = _build_child("sub1", uid="223456789")
     service = _build_service(tmp_path, children=(child,))
@@ -269,7 +298,7 @@ async def test_distribute_does_not_retry_real_transfer_post(tmp_path: Path) -> N
 
     assert calls == 1
     assert result["results"][0]["success"] is False
-    assert "insufficient permission" in result["results"][0]["message"]
+    assert result["results"][0]["message"] == "Distribute failed"
 
 
 @pytest.mark.asyncio

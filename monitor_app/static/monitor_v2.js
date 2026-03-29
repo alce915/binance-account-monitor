@@ -130,6 +130,14 @@ const escapeHtml = (value) =>
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
+const maskUid = (value) => {
+  const text = String(value ?? '').trim();
+  if (!text) return '-';
+  if (text.includes('*')) return text;
+  if (text.length <= 2) return '*'.repeat(text.length);
+  if (text.length <= 6) return `${text.slice(0, 1)}${'*'.repeat(Math.max(text.length - 2, 1))}${text.slice(-1)}`;
+  return `${text.slice(0, 4)}${'*'.repeat(Math.max(text.length - 6, 2))}${text.slice(-2)}`;
+};
 
 const textStatus = (status) => statusTextMap[status] || status || '未知';
 const textMessage = (message) => messageTextMap[message] || message || '-';
@@ -569,7 +577,7 @@ function renderFundingMainSummary() {
         <div class="funding-identity-head">
           <div>
             <div class="funding-identity-title">${escapeHtml(fundingOverview?.main_account_name || fundingSelectedGroupId || '-')}</div>
-            <div class="funding-identity-meta mono">${escapeHtml(String(mainAccount.uid || '-'))}</div>
+            <div class="funding-identity-meta mono">${escapeHtml(maskUid(mainAccount.uid || '-'))}</div>
           </div>
           <div class="badge funding-identity-badge ${mainAccount.transfer_ready ? 'status-ok' : 'status-error'}">
             ${escapeHtml(mainAccount.transfer_ready ? '可操作' : '不可用')}
@@ -601,7 +609,7 @@ function renderFundingRows() {
       <tr class="${eligible ? '' : 'is-disabled'}">
         <td><input type="checkbox" data-funding-account-id="${escapeHtml(accountId)}" ${state.checked ? 'checked' : ''} ${checkboxDisabled ? 'disabled' : ''}></td>
         <td><div>${escapeHtml(row.name || accountId)}</div><div class="mono">${escapeHtml(accountId)}</div></td>
-        <td class="mono">${escapeHtml(row.uid || '-')}</td>
+        <td class="mono">${escapeHtml(maskUid(row.uid || '-'))}</td>
         <td>${fmt(fundingAssetValue(row))}</td>
         <td>
           <div class="funding-amount-wrap">

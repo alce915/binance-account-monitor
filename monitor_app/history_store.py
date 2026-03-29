@@ -10,7 +10,10 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from monitor_app.security import minimize_history_payload, sanitize_error_summary
+
 logger = logging.getLogger("uvicorn.error")
+HISTORY_STORE_SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +106,64 @@ class MonitorHistoryStore:
                 ON history_events (account_id, source, event_time_ms)
                 """
             )
+            current_version = int(self._conn.execute("PRAGMA user_version").fetchone()[0])
+            if current_version < HISTORY_STORE_SCHEMA_VERSION:
+                self._migrate_security_payloads(current_version)
+                self._conn.execute(f"PRAGMA user_version={HISTORY_STORE_SCHEMA_VERSION}")
+
+    def _migrate_security_payloads(self, from_version: int) -> None:
+        updated_history_rows = 0
+        updated_status_rows = 0
+        history_rows = self._conn.execute(
+            """
+            SELECT rowid, source, event_time_ms, unique_key, asset, amount, event_type, payload_json
+            FROM history_events
+            """
+        ).fetchall()
+        for row in history_rows:
+            payload = self._load_payload_json(row["payload_json"])
+            minimized_payload = minimize_history_payload(
+                source=row["source"],
+                event_time_ms=int(row["event_time_ms"]),
+                unique_key=str(row["unique_key"]),
+                asset=str(row["asset"]),
+                amount=str(row["amount"]),
+                event_type=str(row["event_type"]),
+                payload=payload,
+            )
+            minimized_payload_json = json.dumps(minimized_payload, ensure_ascii=False, sort_keys=True)
+            if minimized_payload_json != row["payload_json"]:
+                self._conn.execute(
+                    "UPDATE history_events SET payload_json = ? WHERE rowid = ?",
+                    (minimized_payload_json, row["rowid"]),
+                )
+                updated_history_rows += 1
+
+        status_rows = self._conn.execute(
+            "SELECT rowid, last_error_summary FROM history_source_status WHERE last_error_summary IS NOT NULL"
+        ).fetchall()
+        for row in status_rows:
+            sanitized_summary = sanitize_error_summary(row["last_error_summary"], fallback="History source failed")
+            if sanitized_summary != row["last_error_summary"]:
+                self._conn.execute(
+                    "UPDATE history_source_status SET last_error_summary = ? WHERE rowid = ?",
+                    (sanitized_summary, row["rowid"]),
+                )
+                updated_status_rows += 1
+
+        logger.info(
+            "History store security migration applied from_version=%s updated_history_rows=%s updated_status_rows=%s",
+            from_version,
+            updated_history_rows,
+            updated_status_rows,
+        )
+
+    def _load_payload_json(self, payload_json: str) -> dict[str, Any]:
+        try:
+            payload = json.loads(payload_json)
+        except Exception:
+            return {}
+        return payload if isinstance(payload, dict) else {}
 
     async def close(self) -> None:
         async with self._lock:
@@ -161,7 +222,19 @@ class MonitorHistoryStore:
                                 event.asset,
                                 str(event.amount),
                                 event.event_type,
-                                json.dumps(event.payload, ensure_ascii=False, sort_keys=True),
+                                json.dumps(
+                                    minimize_history_payload(
+                                        source=source,
+                                        event_time_ms=event.event_time_ms,
+                                        unique_key=event.unique_key,
+                                        asset=event.asset,
+                                        amount=event.amount,
+                                        event_type=event.event_type,
+                                        payload=event.payload,
+                                    ),
+                                    ensure_ascii=False,
+                                    sort_keys=True,
+                                ),
                             )
                             for event in events
                         ],
@@ -239,6 +312,7 @@ class MonitorHistoryStore:
         failed_at_ms: int | None = None,
     ) -> None:
         failure_time = int(failed_at_ms or datetime.now(UTC).timestamp() * 1000)
+        safe_error_summary = sanitize_error_summary(error_summary, fallback="History source failed")
         async with self._lock:
             with self._conn:
                 self._conn.execute(
@@ -258,7 +332,7 @@ class MonitorHistoryStore:
                         consecutive_failures = history_source_status.consecutive_failures + 1,
                         last_error_summary = excluded.last_error_summary
                     """,
-                    (account_id, source, failure_time, error_summary),
+                    (account_id, source, failure_time, safe_error_summary),
                 )
 
     async def get_source_status(self, account_id: str, source: str) -> dict[str, Any]:

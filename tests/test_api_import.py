@@ -121,6 +121,7 @@ def test_import_excel_endpoint_replaces_accounts_and_refreshes(monkeypatch, tmp_
     monkeypatch.setattr(api_module, "settings", settings)
 
     with TestClient(api_module.app) as client:
+        client.app.state.allow_test_non_loopback = True
         controller = AccountMonitorController(settings, gateway_factory=lambda account: FakeImportGateway(account))
         client.app.state.monitor = controller
         try:
@@ -160,6 +161,7 @@ def test_import_excel_endpoint_rejects_non_xlsx(monkeypatch, tmp_path: Path) -> 
     monkeypatch.setattr(api_module, "settings", settings)
 
     with TestClient(api_module.app) as client:
+        client.app.state.allow_test_non_loopback = True
         response = client.post(
             "/api/config/import/excel",
             files={"file": ("accounts.csv", b"not-used", "text/csv")},
@@ -191,6 +193,7 @@ def test_import_excel_validation_failure_does_not_overwrite_existing_file(monkey
     monkeypatch.setattr(api_module, "settings", settings)
 
     with TestClient(api_module.app) as client:
+        client.app.state.allow_test_non_loopback = True
         response = client.post(
             "/api/config/import/excel",
             files={"file": ("accounts.xlsx", _build_invalid_workbook_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
@@ -213,6 +216,7 @@ def test_import_excel_endpoint_reports_refresh_failure_after_successful_write(mo
     monkeypatch.setattr(api_module, "settings", settings)
 
     with TestClient(api_module.app) as client:
+        client.app.state.allow_test_non_loopback = True
         controller = AccountMonitorController(settings, gateway_factory=lambda account: FailingImportGateway(account))
         client.app.state.monitor = controller
         try:
@@ -235,6 +239,7 @@ def test_import_excel_endpoint_reports_refresh_failure_after_successful_write(mo
 
 def test_download_excel_template_endpoint_returns_sample_workbook() -> None:
     with TestClient(api_module.app) as client:
+        client.app.state.allow_test_non_loopback = True
         response = client.get("/api/config/import/excel-template")
 
     assert response.status_code == 200

@@ -16,6 +16,7 @@ import httpx
 
 from monitor_app.config import MonitorAccountConfig, Settings
 from monitor_app.history_store import HistoryEvent, MonitorHistoryStore
+from monitor_app.security import sanitize_error_summary
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -445,10 +446,10 @@ class BinanceMonitorGateway:
             )
         except Exception as exc:
             logger.warning(
-                "Distribution summary load failed refresh_id=%s account_id=%s error=%s",
+                "Distribution summary load failed refresh_id=%s account_id=%s error_type=%s",
                 refresh_id or "-",
                 self._account.account_id,
-                exc,
+                exc.__class__.__name__,
             )
             distribution_summary = self._compat_distribution_summary(previous_snapshot)
             distribution_error = self._history_error(
@@ -624,16 +625,17 @@ class BinanceMonitorGateway:
                     await self._history_store.record_source_failure(
                         self._account.account_id,
                         "distribution_backfill",
-                        error_summary=str(error.get("message") or "unknown backfill error"),
+                        error_summary=sanitize_error_summary(error.get("message"), fallback="unknown backfill error"),
                         failed_at_ms=query_end_time,
                     )
                     logger.warning(
-                        "Distribution backfill aborted account_id=%s phase=error window=%s-%s duration_ms=%s error=%s",
+                        "Distribution backfill aborted account_id=%s phase=error window=%s-%s duration_ms=%s source=%s error_type=%s",
                         self._account.account_id,
                         query_start_time,
                         query_end_time,
                         window_duration_ms,
-                        error,
+                        error.get("source"),
+                        error.get("error_type"),
                     )
                     return
                 events = self._build_distribution_events(payload, default_event_time_ms=query_end_time)
@@ -729,7 +731,7 @@ class BinanceMonitorGateway:
             await self._history_store.record_source_failure(
                 self._account.account_id,
                 "distribution_backfill",
-                error_summary=str(exc),
+                error_summary=sanitize_error_summary(exc, fallback="Distribution backfill failed"),
             )
             logger.exception("Distribution backfill crashed account_id=%s phase=exception", self._account.account_id)
         finally:
@@ -744,10 +746,10 @@ class BinanceMonitorGateway:
             return
         if exc is not None:
             logger.error(
-                "Background task failed account_id=%s task=%s error=%s",
+                "Background task failed account_id=%s task=%s error_type=%s",
                 self._account.account_id,
                 label,
-                exc,
+                exc.__class__.__name__,
                 exc_info=(type(exc), exc, exc.__traceback__),
             )
 
@@ -820,9 +822,9 @@ class BinanceMonitorGateway:
             return cached_income_summary, None
         except Exception as exc:
             logger.warning(
-                "Income summary cache load failed account_id=%s error=%s",
+                "Income summary cache load failed account_id=%s error_type=%s",
                 self._account.account_id,
-                exc,
+                exc.__class__.__name__,
             )
             return self._compat_income_summary(previous_snapshot, history_window_days), self._build_section_error(
                 self._history_error(
@@ -864,7 +866,7 @@ class BinanceMonitorGateway:
                 await self._history_store.record_source_failure(
                     self._account.account_id,
                     HISTORY_SOURCE_INCOME,
-                    error_summary=str(error.get("message") or "income refresh failed"),
+                    error_summary=sanitize_error_summary(error.get("message"), fallback="income refresh failed"),
                     failed_at_ms=end_time,
                 )
                 logger.warning(
@@ -904,7 +906,7 @@ class BinanceMonitorGateway:
             await self._history_store.record_source_failure(
                 self._account.account_id,
                 HISTORY_SOURCE_INCOME,
-                error_summary=str(exc),
+                error_summary=sanitize_error_summary(exc, fallback="Income history refresh failed"),
                 failed_at_ms=end_time,
             )
             logger.exception(
@@ -948,7 +950,7 @@ class BinanceMonitorGateway:
                 await self._history_store.record_source_failure(
                     self._account.account_id,
                     HISTORY_SOURCE_DISTRIBUTION,
-                    error_summary=str(error.get("message") or "distribution refresh failed"),
+                    error_summary=sanitize_error_summary(error.get("message"), fallback="distribution refresh failed"),
                     failed_at_ms=end_time,
                 )
                 logger.warning(
@@ -988,7 +990,7 @@ class BinanceMonitorGateway:
             await self._history_store.record_source_failure(
                 self._account.account_id,
                 HISTORY_SOURCE_DISTRIBUTION,
-                error_summary=str(exc),
+                error_summary=sanitize_error_summary(exc, fallback="Distribution history refresh failed"),
                 failed_at_ms=end_time,
             )
             logger.exception(
@@ -1281,7 +1283,7 @@ class BinanceMonitorGateway:
                 retryable = self._is_retryable_error(exc)
                 should_retry = attempt < max_attempts and retryable
                 logger.warning(
-                    "Binance request failure account_id=%s label=%s attempt=%s/%s timeout_s=%s source=%s error_type=%s status_code=%s retry=%s error=%s",
+                    "Binance request failure account_id=%s label=%s attempt=%s/%s timeout_s=%s source=%s error_type=%s status_code=%s retry=%s",
                     self._account.account_id,
                     label,
                     attempt,
@@ -1291,11 +1293,10 @@ class BinanceMonitorGateway:
                     error_type,
                     status_code,
                     should_retry,
-                    exc,
                 )
                 if not should_retry:
                     raise RetriedRequestError(
-                        f"{label} failed after {attempt} attempts: {exc}",
+                        self._safe_request_error_message(label, attempt, source=source, status_code=status_code),
                         label=label,
                         attempts=attempt,
                         cause=exc,
@@ -1314,7 +1315,7 @@ class BinanceMonitorGateway:
         assert last_error is not None
         source, error_type, status_code = self._classify_error(last_error)
         raise RetriedRequestError(
-            f"{label} failed after {max_attempts} attempts: {last_error}",
+            self._safe_request_error_message(label, max_attempts, source=source, status_code=status_code),
             label=label,
             attempts=max_attempts,
             cause=last_error,
@@ -1328,7 +1329,7 @@ class BinanceMonitorGateway:
 
     def _retry_error_payload(self, exc: RetriedRequestError) -> dict[str, Any]:
         return {
-            "message": str(exc),
+            "message": sanitize_error_summary(str(exc), fallback="Binance request failed"),
             "label": exc.label,
             "attempts": exc.attempts,
             "source": exc.source,
@@ -1338,6 +1339,15 @@ class BinanceMonitorGateway:
             "timeout_s": exc.timeout_s,
             "retryable": exc.retryable,
         }
+
+    def _safe_request_error_message(self, label: str, attempts: int, *, source: str, status_code: int | None) -> str:
+        if source == "network":
+            suffix = "network issue"
+        elif status_code is not None:
+            suffix = f"HTTP {status_code}"
+        else:
+            suffix = "request failure"
+        return f"{label} failed after {attempts} attempts ({suffix})"
 
     def _classify_error(self, exc: Exception) -> tuple[str, str, int | None]:
         if isinstance(exc, httpx.TimeoutException):
@@ -1416,19 +1426,19 @@ class BinanceMonitorGateway:
                 await self._history_store.save_mark_prices(current_prices, updated_at_ms=end_time_ms)
             except Exception as exc:
                 logger.warning(
-                    "Mark price cache save failed refresh_id=%s account_id=%s error=%s",
+                    "Mark price cache save failed refresh_id=%s account_id=%s error_type=%s",
                     refresh_id or "-",
                     self._account.account_id,
-                    exc,
+                    exc.__class__.__name__,
                 )
         try:
             stored_prices = await self._history_store.get_mark_prices(symbols)
         except Exception as exc:
             logger.warning(
-                "Mark price cache load failed refresh_id=%s account_id=%s error=%s",
+                "Mark price cache load failed refresh_id=%s account_id=%s error_type=%s",
                 refresh_id or "-",
                 self._account.account_id,
-                exc,
+                exc.__class__.__name__,
             )
             stored_prices = {}
         previous_prices = self._extract_previous_mark_prices(previous_snapshot)
@@ -1444,7 +1454,7 @@ class BinanceMonitorGateway:
         return {
             "error": self._classify_generic_error(
                 request_error,
-                message=f"mark prices failed: {request_error}",
+                message="mark prices failed",
                 source="network",
                 label="mark prices",
             )
@@ -1915,7 +1925,7 @@ class BinanceMonitorGateway:
         context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return {
-            "message": f"{message}: {exc}",
+            "message": sanitize_error_summary(message, fallback="History request failed"),
             "attempts": 1,
             "source": "history",
             "error_type": exc.__class__.__name__,

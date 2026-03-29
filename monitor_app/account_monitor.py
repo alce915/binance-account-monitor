@@ -11,6 +11,7 @@ from uuid import uuid4
 from monitor_app.binance import BinanceMonitorGateway, RefreshMarkPriceProvider
 from monitor_app.config import MonitorAccountConfig, Settings
 from monitor_app.history_store import MonitorHistoryStore
+from monitor_app.security import sanitize_error_summary
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -175,7 +176,7 @@ class AccountMonitorController:
             payload["refresh_result"] = {
                 "success": False,
                 "timeout": False,
-                "message": str(exc),
+                "message": sanitize_error_summary(exc, fallback="Refresh failed"),
                 "updated_at": self._utc_now(),
                 "duration_ms": duration_ms,
                 "refresh_id": refresh_id,
@@ -388,7 +389,7 @@ class AccountMonitorController:
                 "child_account_id": account.child_account_id,
                 "child_account_name": account.child_account_name,
                 "updated_at": datetime.now(UTC),
-                "message": str(exc),
+                "message": sanitize_error_summary(exc, fallback="Account snapshot failed"),
                 "totals": self._empty_totals(),
                 "positions": [],
                 "assets": [],
