@@ -643,8 +643,67 @@ async def test_snapshot_marks_secondary_network_failures_as_fallback_sections(tm
     assert snapshot["distribution_summary"]["total_distribution"] == Decimal("2")
     assert snapshot["section_errors"]["distribution_history"]["source"] == "network"
     assert snapshot["section_errors"]["distribution_history"]["used_fallback"] is True
+    assert snapshot["section_errors"]["distribution_history"]["request_error"]["label"] == "distribution history"
+    assert snapshot["section_errors"]["distribution_history"]["request_error"]["retryable"] is True
+    assert snapshot["section_errors"]["distribution_history"]["timings"]["request_ms"] >= 0
+    assert snapshot["section_errors"]["distribution_history"]["history_context"]["window_count"] >= 1
     assert snapshot["section_errors"]["spot_account"]["source"] == "network"
     assert snapshot["section_errors"]["spot_account"]["used_fallback"] is True
+    assert snapshot["section_errors"]["spot_account"]["request_error"]["label"] == "spot account"
+    assert snapshot["section_errors"]["spot_account"]["timings"]["request_ms"] >= 0
     assert snapshot["spot_assets"] == [{"asset": "RWUSD", "free": Decimal("2"), "locked": Decimal("0"), "total": Decimal("2")}]
     assert snapshot["section_errors"]["mark_prices"]["source"] == "network"
+    assert snapshot["section_errors"]["mark_prices"]["request_error"]["label"] == "mark prices"
     assert "mark_prices" in snapshot["diagnostics"]["fallback_sections"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_income_history_does_not_advance_watermark_when_split_window_fails(tmp_path: Path) -> None:
+    settings = Settings(_env_file=None, monitor_history_db_path=tmp_path / "history.db")
+    gateway = BinanceMonitorGateway(
+        settings,
+        MonitorAccountConfig(
+            account_id="group_a.sub1",
+            child_account_id="sub1",
+            child_account_name="Sub One",
+            main_account_id="group_a",
+            main_account_name="Group A",
+            api_key="k",
+            api_secret="s",
+        ),
+    )
+    end_time = int(datetime.now(UTC).timestamp() * 1000)
+    first_time = end_time - 2_000
+    second_time = end_time - 1_000
+    third_time = end_time
+    rows = [
+        {"incomeType": "COMMISSION", "income": "1", "asset": "USDT", "time": first_time, "symbol": "BTCUSDT"},
+        {"incomeType": "COMMISSION", "income": "2", "asset": "USDT", "time": second_time, "symbol": "BTCUSDT"},
+        {"incomeType": "COMMISSION", "income": "3", "asset": "USDT", "time": third_time, "symbol": "BTCUSDT"},
+    ]
+    calls = 0
+
+    async def flaky_signed_request(path: str, params: dict | None = None, *, timeout_s: float | None = None):
+        nonlocal calls
+        assert path == "/papi/v1/um/income"
+        calls += 1
+        if calls >= 2:
+            raise httpx.ReadTimeout("temporary", request=httpx.Request("GET", f"https://example.com{path}"))
+        assert params is not None
+        filtered = [row for row in rows if int(params["startTime"]) <= int(row["time"]) <= int(params["endTime"])]
+        return filtered[: int(params["limit"])]
+
+    gateway._signed_request = flaky_signed_request  # type: ignore[method-assign]
+    try:
+        error = await gateway._refresh_income_history(history_window_days=7, income_limit=2, end_time=end_time)
+        summary = await gateway._history_store.summarize_income("group_a.sub1", 7)
+        last_successful_end_time = await gateway._history_store.get_last_successful_end_time("group_a.sub1", "income")
+    finally:
+        await gateway.close()
+
+    assert error is not None
+    assert error["source"] == "network"
+    assert error["history_context"]["limit_hits"] >= 1
+    assert error["history_context"]["split_count"] >= 1
+    assert summary["records"] == 0
+    assert last_successful_end_time is None

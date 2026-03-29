@@ -3,19 +3,50 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from time import perf_counter
+from typing import Any, Awaitable, Callable
 from urllib.parse import urlencode
+from uuid import uuid4
 
 import httpx
 
 from monitor_app.config import MainAccountConfig, MonitorAccountConfig, Settings
 
 
+logger = logging.getLogger("uvicorn.error")
+
+
 class FundingTransferError(RuntimeError):
     pass
+
+
+class FundingTransferRequestError(FundingTransferError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        label: str,
+        attempts: int,
+        duration_ms: int,
+        timeout_s: float,
+        source: str,
+        error_type: str,
+        status_code: int | None = None,
+        retryable: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.label = label
+        self.attempts = attempts
+        self.duration_ms = duration_ms
+        self.timeout_s = timeout_s
+        self.source = source
+        self.error_type = error_type
+        self.status_code = status_code
+        self.retryable = retryable
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,23 +69,42 @@ class FundingTransferService:
             await client.aclose()
 
     async def get_group_overview(self, main_id: str) -> dict[str, Any]:
+        request_id = self._new_request_id()
+        started_at = perf_counter()
         main_account = self._get_main_account(main_id)
-        email_by_uid: dict[str, str] = {}
+        timings: dict[str, Any] = {}
+        error_context: dict[str, Any] = {}
+
         main_reason = ""
+        email_by_uid: dict[str, str] = {}
         main_spot_assets: list[dict[str, str]] = []
 
         if main_account.has_transfer_credentials:
             try:
+                email_started_at = perf_counter()
                 email_by_uid = await self._get_sub_account_email_map(main_account)
-                main_spot_assets = await self._fetch_spot_assets(self._main_credentials(main_account))
-            except Exception as exc:
-                main_reason = f"主账号归集 API 不可用：{exc}"
-        else:
-            main_reason = "当前分组未配置主账号归集 API（Excel 需提供 account_id=main 行）"
+                timings["email_map_ms"] = int((perf_counter() - email_started_at) * 1000)
 
+                main_spot_started_at = perf_counter()
+                main_spot_assets = await self._fetch_spot_assets(self._main_credentials(main_account))
+                timings["main_spot_query_ms"] = int((perf_counter() - main_spot_started_at) * 1000)
+            except Exception as exc:
+                main_reason = f"Main transfer API unavailable: {exc}"
+                error_context["main_account_query"] = self._error_context_payload(exc)
+                logger.warning(
+                    "Funding overview main account query failed request_id=%s main_id=%s error=%s",
+                    request_id,
+                    main_account.main_id,
+                    exc,
+                )
+        else:
+            main_reason = "Main transfer API is not configured for this group (Excel requires an account_id=main row)."
+
+        children_started_at = perf_counter()
         children = await asyncio.gather(
             *(self._build_child_overview(child, email_by_uid, main_ready=main_reason == "") for child in main_account.children)
         )
+        timings["children_query_ms"] = int((perf_counter() - children_started_at) * 1000)
 
         main_spot_available = self._spot_available_map(main_spot_assets)
         assets = sorted(
@@ -65,7 +115,19 @@ class FundingTransferService:
         )
         any_executable = any(child["can_distribute"] or child["can_collect"] for child in children)
         available = main_reason == "" and any_executable
-        reason = main_reason or ("" if any_executable else "当前分组暂无可操作子账号，请检查 UID、子账号 API 或现货余额")
+        reason = main_reason or (
+            "" if any_executable else "No eligible sub-account is available for this group. Check UID, sub-account API, or spot balances."
+        )
+
+        timings["total_ms"] = int((perf_counter() - started_at) * 1000)
+        logger.info(
+            "Funding overview resolved request_id=%s main_id=%s available=%s children=%s total_ms=%s",
+            request_id,
+            main_account.main_id,
+            available,
+            len(children),
+            timings["total_ms"],
+        )
 
         return {
             "main_account_id": main_account.main_id,
@@ -73,6 +135,9 @@ class FundingTransferService:
             "available": available,
             "reason": reason,
             "assets": assets,
+            "request_id": request_id,
+            "timings": timings,
+            "error_context": error_context,
             "main_account": {
                 "uid": main_account.transfer_uid,
                 "transfer_ready": main_reason == "",
@@ -87,17 +152,35 @@ class FundingTransferService:
         }
 
     async def distribute(self, main_id: str, *, asset: str, transfers: list[dict[str, Any]]) -> dict[str, Any]:
+        request_id = self._new_request_id()
+        started_at = perf_counter()
+        timings: dict[str, Any] = {}
+        error_context: dict[str, Any] = {}
+
         normalized_asset = self._normalize_asset(asset)
         main_account = self._get_main_account(main_id)
         if not main_account.has_transfer_credentials:
-            raise FundingTransferError("当前分组未配置主账号归集 API")
+            raise FundingTransferError("Main transfer API is not configured for this group")
 
-        email_by_uid = await self._get_sub_account_email_map(main_account)
+        try:
+            email_started_at = perf_counter()
+            email_by_uid = await self._get_sub_account_email_map(main_account)
+            timings["email_map_ms"] = int((perf_counter() - email_started_at) * 1000)
+        except Exception as exc:
+            error_context["email_map"] = self._error_context_payload(exc)
+            raise FundingTransferError(f"Failed to query sub-account email mapping: {exc}") from exc
+
         child_by_id = {child.account_id: child for child in main_account.children}
         main_credentials = self._main_credentials(main_account)
-        main_spot_assets = await self._fetch_spot_assets(main_credentials)
-        main_available = Decimal(self._spot_available_map(main_spot_assets).get(normalized_asset, "0"))
+        try:
+            main_spot_started_at = perf_counter()
+            main_spot_assets = await self._fetch_spot_assets(main_credentials)
+            timings["main_spot_query_ms"] = int((perf_counter() - main_spot_started_at) * 1000)
+        except Exception as exc:
+            error_context["main_spot_query"] = self._error_context_payload(exc)
+            raise FundingTransferError(f"Failed to query main account spot balances: {exc}") from exc
 
+        main_available = Decimal(self._spot_available_map(main_spot_assets).get(normalized_asset, "0"))
         executable: list[tuple[MonitorAccountConfig, str, Decimal]] = []
         total_amount = Decimal("0")
         for item in transfers:
@@ -107,18 +190,19 @@ class FundingTransferService:
                 continue
             child = child_by_id.get(account_id)
             if child is None:
-                raise FundingTransferError(f"未知子账号：{account_id}")
+                raise FundingTransferError(f"Unknown sub-account: {account_id}")
             child_email = self._resolve_child_email(child, email_by_uid)
             executable.append((child, child_email, amount))
             total_amount += amount
 
         if not executable:
-            raise FundingTransferError("请至少勾选一个子账号并填写大于 0 的分发金额")
+            raise FundingTransferError("Select at least one sub-account and enter a distribute amount greater than 0")
         if total_amount > main_available:
             raise FundingTransferError(
-                f"主账号现货可用余额不足：{normalized_asset} 仅有 {self._format_decimal(main_available)}"
+                f"Main account spot balance is insufficient: {normalized_asset} only has {self._format_decimal(main_available)} available"
             )
 
+        transfer_started_at = perf_counter()
         results = [
             await self._distribute_to_child(
                 main_credentials=main_credentials,
@@ -129,14 +213,34 @@ class FundingTransferService:
             )
             for child, child_email, amount in executable
         ]
+        timings["transfer_ms"] = int((perf_counter() - transfer_started_at) * 1000)
 
+        overview_started_at = perf_counter()
         overview = await self.get_group_overview(main_id)
+        timings["overview_refresh_ms"] = int((perf_counter() - overview_started_at) * 1000)
+        timings["total_ms"] = int((perf_counter() - started_at) * 1000)
+
+        success_count, failure_count = self._operation_counts(results)
+        logger.info(
+            "Funding transfer completed request_id=%s direction=distribute main_id=%s asset=%s child_count=%s success_count=%s failure_count=%s total_ms=%s",
+            request_id,
+            main_id,
+            normalized_asset,
+            len(executable),
+            success_count,
+            failure_count,
+            timings["total_ms"],
+        )
+
         return {
             "direction": "distribute",
             "asset": normalized_asset,
             "results": results,
             "overview": overview,
-            "message": self._summarize_operation("分发", results),
+            "request_id": request_id,
+            "timings": timings,
+            "error_context": error_context,
+            "message": self._summarize_operation("Distribute", results),
         }
 
     async def collect(
@@ -147,20 +251,37 @@ class FundingTransferService:
         transfers: list[dict[str, Any]] | None = None,
         account_ids: list[str] | None = None,
     ) -> dict[str, Any]:
+        request_id = self._new_request_id()
+        started_at = perf_counter()
+        timings: dict[str, Any] = {}
+        error_context: dict[str, Any] = {}
+
         normalized_asset = self._normalize_asset(asset)
         main_account = self._get_main_account(main_id)
         if not main_account.has_transfer_credentials:
-            raise FundingTransferError("当前分组未配置主账号归集 API")
+            raise FundingTransferError("Main transfer API is not configured for this group")
 
-        email_by_uid = await self._get_sub_account_email_map(main_account)
+        try:
+            email_started_at = perf_counter()
+            email_by_uid = await self._get_sub_account_email_map(main_account)
+            timings["email_map_ms"] = int((perf_counter() - email_started_at) * 1000)
+        except Exception as exc:
+            error_context["email_map"] = self._error_context_payload(exc)
+            raise FundingTransferError(f"Failed to query sub-account email mapping: {exc}") from exc
+
         child_by_id = {child.account_id: child for child in main_account.children}
         main_credentials = self._main_credentials(main_account)
         requested_transfers = list(transfers or [])
-        legacy_account_ids = [str(account_id or "").strip().lower() for account_id in (account_ids or []) if str(account_id or "").strip()]
+        legacy_account_ids = [
+            str(account_id or "").strip().lower()
+            for account_id in (account_ids or [])
+            if str(account_id or "").strip()
+        ]
 
         results: list[dict[str, Any]] = []
         if requested_transfers:
             executable: list[tuple[MonitorAccountConfig, str, Decimal]] = []
+            collectable_started_at = perf_counter()
             for item in requested_transfers:
                 account_id = str(item.get("account_id") or "").strip().lower()
                 amount = self._parse_positive_amount(item.get("amount"), field_name=f"amount for {account_id}")
@@ -168,18 +289,20 @@ class FundingTransferService:
                     continue
                 child = child_by_id.get(account_id)
                 if child is None:
-                    raise FundingTransferError(f"未知子账号：{account_id}")
+                    raise FundingTransferError(f"Unknown sub-account: {account_id}")
                 child_email = self._resolve_child_email(child, email_by_uid)
                 available_amount = await self._collectable_amount(child, normalized_asset)
                 if amount > available_amount:
                     raise FundingTransferError(
-                        f"子账号 {child.child_account_name or child.account_id} 的 {normalized_asset} 最大可归集 {self._format_decimal(available_amount)}"
+                        f"Sub-account {child.child_account_name or child.account_id} can collect at most {self._format_decimal(available_amount)} {normalized_asset}"
                     )
                 executable.append((child, child_email, amount))
+            timings["collectable_query_ms"] = int((perf_counter() - collectable_started_at) * 1000)
 
             if not executable:
-                raise FundingTransferError("请至少勾选一个子账号并填写大于 0 的归集金额")
+                raise FundingTransferError("Select at least one sub-account and enter a collect amount greater than 0")
 
+            transfer_started_at = perf_counter()
             results = [
                 await self._collect_from_child(
                     main_credentials=main_credentials,
@@ -190,14 +313,17 @@ class FundingTransferService:
                 )
                 for child, child_email, amount in executable
             ]
+            timings["transfer_ms"] = int((perf_counter() - transfer_started_at) * 1000)
         else:
             if not legacy_account_ids:
-                raise FundingTransferError("请至少勾选一个子账号")
+                raise FundingTransferError("Select at least one sub-account")
 
+            collectable_started_at = perf_counter()
+            transfer_started_at = perf_counter()
             for account_id in legacy_account_ids:
                 child = child_by_id.get(account_id)
                 if child is None:
-                    raise FundingTransferError(f"未知子账号：{account_id}")
+                    raise FundingTransferError(f"Unknown sub-account: {account_id}")
                 child_email = self._resolve_child_email(child, email_by_uid)
                 try:
                     available_amount = await self._collectable_amount(child, normalized_asset)
@@ -208,7 +334,7 @@ class FundingTransferService:
                     continue
                 if available_amount <= Decimal("0"):
                     result = self._base_result(child, "0")
-                    result["message"] = "当前代币在子账号现货中无可归集余额"
+                    result["message"] = "No collectable spot balance is available for this asset"
                     results.append(result)
                     continue
                 results.append(
@@ -220,14 +346,35 @@ class FundingTransferService:
                         amount=available_amount,
                     )
                 )
+            timings["collectable_query_ms"] = int((perf_counter() - collectable_started_at) * 1000)
+            timings["transfer_ms"] = int((perf_counter() - transfer_started_at) * 1000)
 
+        overview_started_at = perf_counter()
         overview = await self.get_group_overview(main_id)
+        timings["overview_refresh_ms"] = int((perf_counter() - overview_started_at) * 1000)
+        timings["total_ms"] = int((perf_counter() - started_at) * 1000)
+
+        success_count, failure_count = self._operation_counts(results)
+        logger.info(
+            "Funding transfer completed request_id=%s direction=collect main_id=%s asset=%s child_count=%s success_count=%s failure_count=%s total_ms=%s",
+            request_id,
+            main_id,
+            normalized_asset,
+            len(results),
+            success_count,
+            failure_count,
+            timings["total_ms"],
+        )
+
         return {
             "direction": "collect",
             "asset": normalized_asset,
             "results": results,
             "overview": overview,
-            "message": self._summarize_operation("归集", results),
+            "request_id": request_id,
+            "timings": timings,
+            "error_context": error_context,
+            "message": self._summarize_operation("Collect", results),
         }
 
     async def _build_child_overview(
@@ -239,22 +386,24 @@ class FundingTransferService:
     ) -> dict[str, Any]:
         spot_assets: list[dict[str, str]] = []
         spot_reason = ""
+        error_context: dict[str, Any] = {}
 
         if child.api_key and child.api_secret:
             try:
                 spot_assets = await self._fetch_spot_assets(self._child_credentials(child))
             except Exception as exc:
-                spot_reason = f"现货余额查询失败：{exc}"
+                spot_reason = f"Spot balance query failed: {exc}"
+                error_context["spot_query"] = self._error_context_payload(exc)
         else:
-            spot_reason = "未配置子账号 API"
+            spot_reason = "Sub-account API is not configured"
 
         transfer_reason = ""
         if not main_ready:
-            transfer_reason = "当前分组主账号归集 API 不可用"
+            transfer_reason = "Main transfer API is unavailable for this group"
         elif not child.uid:
-            transfer_reason = "未配置子账号 UID"
+            transfer_reason = "Sub-account UID is not configured"
         elif child.uid not in email_by_uid:
-            transfer_reason = "主账号 API 未识别该 UID 对应的子账号"
+            transfer_reason = "Main transfer API could not resolve an email for this UID"
 
         can_distribute = transfer_reason == ""
         can_collect = transfer_reason == "" and spot_reason == ""
@@ -277,6 +426,7 @@ class FundingTransferService:
             "spot_available": spot_available,
             "funding_assets": spot_assets,
             "funding_available": spot_available,
+            "error_context": error_context,
         }
 
     async def _distribute_to_child(
@@ -305,9 +455,9 @@ class FundingTransferService:
                 },
             )
             result["success"] = True
-            result["message"] = "分发成功"
+            result["message"] = "Distribute succeeded"
         except Exception as exc:
-            result["message"] = f"分发失败：{exc}"
+            result["message"] = f"Distribute failed: {exc}"
         return result
 
     async def _collect_from_child(
@@ -322,7 +472,7 @@ class FundingTransferService:
         amount_text = self._format_decimal(amount)
         result = self._base_result(child, amount_text)
         if amount <= Decimal("0"):
-            result["message"] = "当前代币在子账号现货中无可归集余额"
+            result["message"] = "No collectable spot balance is available for this asset"
             return result
 
         try:
@@ -339,18 +489,20 @@ class FundingTransferService:
                 },
             )
             result["success"] = True
-            result["message"] = "归集成功"
+            result["message"] = "Collect succeeded"
         except Exception as exc:
-            result["message"] = f"归集失败：{exc}"
+            result["message"] = f"Collect failed: {exc}"
         return result
 
     async def _collectable_amount(self, child: MonitorAccountConfig, asset: str) -> Decimal:
         if not child.api_key or not child.api_secret:
-            raise FundingTransferError(f"子账号 {child.child_account_name or child.account_id} 未配置子账号 API")
+            raise FundingTransferError(f"Sub-account {child.child_account_name or child.account_id} does not have API credentials configured")
         try:
             child_spot_assets = await self._fetch_spot_assets(self._child_credentials(child))
         except Exception as exc:
-            raise FundingTransferError(f"子账号 {child.child_account_name or child.account_id} 现货余额查询失败：{exc}") from exc
+            raise FundingTransferError(
+                f"Failed to query spot balance for sub-account {child.child_account_name or child.account_id}: {exc}"
+            ) from exc
         return Decimal(self._spot_available_map(child_spot_assets).get(asset, "0"))
 
     async def _get_sub_account_email_map(self, main_account: MainAccountConfig) -> dict[str, str]:
@@ -358,11 +510,12 @@ class FundingTransferService:
         page = 1
         result: dict[str, str] = {}
         while True:
-            payload = await self._signed_request(
+            payload = await self._signed_read_request_with_retry(
                 credentials,
                 "GET",
                 "/sapi/v1/sub-account/list",
                 {"page": page, "limit": 200},
+                label=f"sub-account list page {page}",
             )
             rows = payload.get("subAccounts") if isinstance(payload, dict) else []
             if not isinstance(rows, list):
@@ -383,7 +536,13 @@ class FundingTransferService:
         return result
 
     async def _fetch_spot_assets(self, credentials: BinanceCredentials) -> list[dict[str, str]]:
-        payload = await self._signed_request(credentials, "GET", "/api/v3/account")
+        payload = await self._signed_read_request_with_retry(
+            credentials,
+            "GET",
+            "/api/v3/account",
+            None,
+            label="spot account",
+        )
         rows = payload.get("balances") if isinstance(payload, dict) else []
         assets: list[dict[str, str]] = []
         for item in rows if isinstance(rows, list) else []:
@@ -408,12 +567,110 @@ class FundingTransferService:
         assets.sort(key=lambda entry: entry["asset"])
         return assets
 
+    async def _signed_read_request_with_retry(
+        self,
+        credentials: BinanceCredentials,
+        method: str,
+        path: str,
+        params: dict[str, Any] | None,
+        *,
+        label: str,
+    ) -> Any:
+        timeout_s = self._request_timeout_s()
+        return await self._request_with_retry(
+            lambda: self._signed_request_once(credentials, method, path, params, timeout_s=timeout_s),
+            label=label,
+            timeout_s=timeout_s,
+            max_attempts=self._read_retry_attempts(),
+        )
+
+    async def _request_with_retry(
+        self,
+        operation: Callable[[], Awaitable[Any]],
+        *,
+        label: str,
+        timeout_s: float,
+        max_attempts: int,
+    ) -> Any:
+        started_at = perf_counter()
+        last_error: Exception | None = None
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return await operation()
+            except Exception as exc:
+                last_error = exc
+                source, error_type, status_code = self._classify_error(exc)
+                retryable = self._is_retryable_error(exc)
+                should_retry = retryable and attempt < max_attempts
+                logger.warning(
+                    "Funding read request failure label=%s attempt=%s/%s timeout_s=%s source=%s error_type=%s status_code=%s retry=%s error=%s",
+                    label,
+                    attempt,
+                    max_attempts,
+                    timeout_s,
+                    source,
+                    error_type,
+                    status_code,
+                    should_retry,
+                    exc,
+                )
+                if not should_retry:
+                    raise FundingTransferRequestError(
+                        f"{label} failed after {attempt} attempts: {self._format_request_exception(exc)}",
+                        label=label,
+                        attempts=attempt,
+                        duration_ms=int((perf_counter() - started_at) * 1000),
+                        timeout_s=timeout_s,
+                        source=source,
+                        error_type=error_type,
+                        status_code=status_code,
+                        retryable=retryable,
+                    ) from exc
+                await asyncio.sleep(0.2 * attempt)
+
+        assert last_error is not None
+        source, error_type, status_code = self._classify_error(last_error)
+        raise FundingTransferRequestError(
+            f"{label} failed after {max_attempts} attempts: {self._format_request_exception(last_error)}",
+            label=label,
+            attempts=max_attempts,
+            duration_ms=int((perf_counter() - started_at) * 1000),
+            timeout_s=timeout_s,
+            source=source,
+            error_type=error_type,
+            status_code=status_code,
+            retryable=self._is_retryable_error(last_error),
+        ) from last_error
+
     async def _signed_request(
         self,
         credentials: BinanceCredentials,
         method: str,
         path: str,
         params: dict[str, Any] | None = None,
+        *,
+        timeout_s: float | None = None,
+    ) -> Any:
+        try:
+            return await self._signed_request_once(
+                credentials,
+                method,
+                path,
+                params,
+                timeout_s=timeout_s or self._request_timeout_s(),
+            )
+        except Exception as exc:
+            raise FundingTransferError(self._format_request_exception(exc)) from exc
+
+    async def _signed_request_once(
+        self,
+        credentials: BinanceCredentials,
+        method: str,
+        path: str,
+        params: dict[str, Any] | None,
+        *,
+        timeout_s: float,
     ) -> Any:
         client = await self._get_client(credentials.api_key)
         query_params = dict(params or {})
@@ -425,16 +682,8 @@ class FundingTransferService:
             query.encode("utf-8"),
             hashlib.sha256,
         ).hexdigest()
-        timeout_s = max(self._settings.binance_secondary_timeout_ms, 1) / 1000
-        try:
-            response = await client.request(method, f"{path}?{query}&signature={signature}", timeout=timeout_s)
-        except (httpx.TimeoutException, httpx.NetworkError) as exc:
-            raise FundingTransferError(f"Binance 网络请求失败：{exc}") from exc
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            detail = self._extract_error_message(exc.response)
-            raise FundingTransferError(detail) from exc
+        response = await client.request(method, f"{path}?{query}&signature={signature}", timeout=timeout_s)
+        response.raise_for_status()
         return response.json()
 
     async def _get_client(self, api_key: str) -> httpx.AsyncClient:
@@ -449,11 +698,62 @@ class FundingTransferService:
                 self._clients[api_key] = client
             return client
 
+    def _new_request_id(self) -> str:
+        return uuid4().hex[:12]
+
+    def _request_timeout_s(self) -> float:
+        return max(self._settings.binance_secondary_timeout_ms, 1) / 1000
+
+    def _read_retry_attempts(self) -> int:
+        return max(1, self._settings.binance_secondary_retry_attempts)
+
+    def _classify_error(self, exc: Exception) -> tuple[str, str, int | None]:
+        if isinstance(exc, httpx.TimeoutException):
+            return "network", exc.__class__.__name__, None
+        if isinstance(exc, httpx.NetworkError):
+            return "network", exc.__class__.__name__, None
+        if isinstance(exc, httpx.HTTPStatusError):
+            status_code = exc.response.status_code
+            source = "network" if status_code in {408, 409, 429, 500, 502, 503, 504} else "binance"
+            return source, exc.__class__.__name__, status_code
+        if isinstance(exc, FundingTransferRequestError):
+            return exc.source, exc.error_type, exc.status_code
+        return "binance", exc.__class__.__name__, None
+
+    def _is_retryable_error(self, exc: Exception) -> bool:
+        if isinstance(exc, FundingTransferRequestError):
+            return exc.retryable
+        if isinstance(exc, (httpx.TimeoutException, httpx.NetworkError)):
+            return True
+        if isinstance(exc, httpx.HTTPStatusError):
+            return exc.response.status_code in {408, 409, 429, 500, 502, 503, 504}
+        return False
+
+    def _request_error_payload(self, exc: FundingTransferRequestError) -> dict[str, Any]:
+        return {
+            "label": exc.label,
+            "attempts": exc.attempts,
+            "duration_ms": exc.duration_ms,
+            "timeout_s": exc.timeout_s,
+            "source": exc.source,
+            "error_type": exc.error_type,
+            "status_code": exc.status_code,
+            "retryable": exc.retryable,
+        }
+
+    def _error_context_payload(self, exc: Exception) -> dict[str, Any]:
+        if isinstance(exc, FundingTransferRequestError):
+            return self._request_error_payload(exc)
+        return {
+            "message": str(exc),
+            "error_type": exc.__class__.__name__,
+        }
+
     def _get_main_account(self, main_id: str) -> MainAccountConfig:
         normalized = str(main_id or "").strip().lower()
         main_account = self._settings.monitor_main_accounts.get(normalized)
         if main_account is None:
-            raise FundingTransferError(f"未找到分组：{normalized}")
+            raise FundingTransferError(f"Unknown group: {normalized}")
         return main_account
 
     def _main_credentials(self, main_account: MainAccountConfig) -> BinanceCredentials:
@@ -467,10 +767,10 @@ class FundingTransferService:
 
     def _resolve_child_email(self, child: MonitorAccountConfig, email_by_uid: dict[str, str]) -> str:
         if not child.uid:
-            raise FundingTransferError(f"子账号 {child.account_id} 未配置 UID")
+            raise FundingTransferError(f"Sub-account {child.account_id} does not have a configured UID")
         child_email = email_by_uid.get(child.uid)
         if not child_email:
-            raise FundingTransferError(f"主账号 API 未找到 UID {child.uid} 对应的子账号邮箱")
+            raise FundingTransferError(f"Main transfer API could not resolve an email for UID {child.uid}")
         return child_email
 
     def _base_result(self, child: MonitorAccountConfig, amount_text: str) -> dict[str, Any]:
@@ -515,14 +815,28 @@ class FundingTransferService:
         if isinstance(payload, dict):
             message = str(payload.get("msg") or payload.get("message") or "").strip()
             if message:
-                return f"Binance 返回错误：{message}"
-        return f"Binance 返回错误：HTTP {response.status_code}"
+                return f"Binance returned an error: {message}"
+        return f"Binance returned an HTTP {response.status_code} error"
+
+    def _format_request_exception(self, exc: Exception) -> str:
+        if isinstance(exc, FundingTransferRequestError):
+            return str(exc)
+        if isinstance(exc, (httpx.TimeoutException, httpx.NetworkError)):
+            return f"Binance network request failed: {exc}"
+        if isinstance(exc, httpx.HTTPStatusError):
+            return self._extract_error_message(exc.response)
+        return str(exc)
+
+    def _operation_counts(self, results: list[dict[str, Any]]) -> tuple[int, int]:
+        success_count = sum(1 for result in results if result.get("success"))
+        failure_count = max(0, len(results) - success_count)
+        return success_count, failure_count
 
     def _summarize_operation(self, action_label: str, results: list[dict[str, Any]]) -> str:
         success_count = sum(1 for result in results if result["success"])
         total_count = len(results)
         if success_count == total_count:
-            return f"{action_label}成功，共处理 {total_count} 个子账号"
+            return f"{action_label} succeeded for {total_count} sub-accounts"
         if success_count == 0:
-            return f"{action_label}失败，未成功处理任何子账号"
-        return f"{action_label}部分成功，成功 {success_count} 个，失败 {total_count - success_count} 个"
+            return f"{action_label} failed for all selected sub-accounts"
+        return f"{action_label} partially succeeded: {success_count} succeeded, {total_count - success_count} failed"

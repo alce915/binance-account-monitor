@@ -30,6 +30,7 @@ const fundingLogLatestTime = document.getElementById('fundingLogLatestTime');
 const fundingLogList = document.getElementById('fundingLogList');
 
 const query = new URLSearchParams(window.location.search);
+const TEST_MODE = Boolean(window.__MONITOR_V2_TEST_MODE__);
 const accountIds = query.get('account_ids');
 const groupsUrl = accountIds
   ? `/api/monitor/groups?account_ids=${encodeURIComponent(accountIds)}`
@@ -1236,6 +1237,58 @@ function scheduleStreamRender(payload) {
   });
 }
 
+function resetMonitorV2TestState() {
+  toggleBusy = false;
+  refreshBusy = false;
+  importBusy = false;
+  refreshCooldownSeconds = 0;
+  if (refreshCooldownTimer !== null) {
+    window.clearInterval(refreshCooldownTimer);
+    refreshCooldownTimer = null;
+  }
+
+  fundingModalBusy = false;
+  fundingRefreshBusy = false;
+  fundingRefreshCooldownSeconds = 0;
+  if (fundingRefreshCooldownTimer !== null) {
+    window.clearInterval(fundingRefreshCooldownTimer);
+    fundingRefreshCooldownTimer = null;
+  }
+
+  fundingOverview = null;
+  fundingDirection = 'distribute';
+  fundingSelectedGroupId = '';
+  fundingSelectedAsset = '';
+  fundingSelectionState = {};
+  fundingSyncAmountEnabled = false;
+  fundingLogEntries = [];
+  fundingLogCounter = 0;
+  fundingLastCapabilitySignature = '';
+
+  toolbarStatsSignature = '';
+  summarySignature = '';
+  profitSummarySignature = '';
+  pendingStreamPayload = null;
+  if (pendingStreamFrame !== null) {
+    window.cancelAnimationFrame(pendingStreamFrame);
+    pendingStreamFrame = null;
+  }
+  latestPayload = null;
+
+  if (fundingModalShell) fundingModalShell.classList.add('hidden');
+  if (fundingRows) fundingRows.innerHTML = '';
+  if (fundingMainSummary) fundingMainSummary.innerHTML = '';
+  if (groupsContainer) groupsContainer.innerHTML = '';
+  if (summaryCards) summaryCards.innerHTML = '';
+  if (profitCards) profitCards.innerHTML = '';
+  if (toolbarStats) toolbarStats.innerHTML = '';
+  if (messageText) messageText.textContent = '';
+  if (updatedAt) updatedAt.textContent = '-';
+
+  renderFundingLogPanel();
+  applyActionButtonState();
+}
+
 function describeRefreshResult(refreshResult, elapsedSeconds) {
   if (!refreshResult) return `刷新完成，耗时 ${elapsedSeconds} 秒`;
   if (refreshResult.success) {
@@ -1534,6 +1587,41 @@ async function bootstrap() {
   });
 }
 
+window.__monitorV2 = {
+  render,
+  scheduleStreamRender,
+  appendFundingLog,
+  renderFundingLogPanel,
+  renderFundingModal,
+  openFundingModal,
+  closeFundingModal,
+  bootstrap,
+  refreshFundingOverviewNow,
+  submitFundingOperation,
+  resetTestState: resetMonitorV2TestState,
+  getFundingLogEntries: () => [...fundingLogEntries],
+  setFundingOverview: (overview) => {
+    fundingOverview = overview;
+  },
+  setFundingDirection: (direction) => {
+    fundingDirection = direction;
+  },
+  setFundingSelectedGroupId: (groupId) => {
+    fundingSelectedGroupId = groupId;
+  },
+  setFundingSelectedAsset: (asset) => {
+    fundingSelectedAsset = asset;
+  },
+  setLatestPayload: (payload) => {
+    latestPayload = payload;
+  },
+  setFundingSelectionState: (selectionState) => {
+    fundingSelectionState = selectionState || {};
+  },
+};
+
 applyActionButtonState();
 renderFundingLogPanel();
-bootstrap();
+if (!TEST_MODE) {
+  bootstrap();
+}

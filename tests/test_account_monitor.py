@@ -387,7 +387,12 @@ async def test_refresh_partial_failure_commits_partial_payload(tmp_path: Path) -
     assert second["refresh_result"]["failed_accounts"] == [
         {"account_id": "group_a.sub2", "message": "temporary refresh failure"}
     ]
-    failing_account = next(account for account in second["accounts"] if account["account_id"] == "group_a.sub2")
+    failing_account = next(
+        account
+        for group in second["groups"]
+        for account in group["accounts"]
+        if account["account_id"] == "group_a.sub2"
+    )
     assert failing_account["status"] == "error"
     assert failing_account["message"] == "temporary refresh failure"
 
@@ -604,6 +609,89 @@ async def test_refresh_result_includes_fallback_sections(tmp_path: Path) -> None
     assert refreshed["refresh_result"]["fallback_sections"] == [
         {"account_id": "group_a.sub1", "sections": ["distribution_history"]}
     ]
+
+
+class DiagnosticGateway(FakeMonitorGateway):
+    async def get_unified_account_snapshot(
+        self,
+        *,
+        history_window_days: int = 7,
+        income_limit: int = 100,
+        interest_limit: int = 100,
+        previous_snapshot: dict | None = None,
+        mark_price_provider=None,
+        refresh_id: str | None = None,
+    ) -> dict:
+        payload = await super().get_unified_account_snapshot(
+            history_window_days=history_window_days,
+            income_limit=income_limit,
+            interest_limit=interest_limit,
+            previous_snapshot=previous_snapshot,
+            mark_price_provider=mark_price_provider,
+            refresh_id=refresh_id,
+        )
+        if self.account.account_id == "group_a.sub1":
+            payload["diagnostics"]["timings"] = {"gateway_total_ms": 17, "spot_query_ms": 9}
+            payload["section_errors"] = {
+                "distribution_history": {
+                    "message": "temporary network error",
+                    "attempts": 3,
+                    "used_fallback": True,
+                    "stale": True,
+                    "source": "network",
+                }
+            }
+            payload["diagnostics"]["fallback_sections"] = ["distribution_history"]
+            return payload
+        payload["diagnostics"]["timings"] = {"gateway_total_ms": 41, "spot_query_ms": 6}
+        return payload
+
+
+@pytest.mark.asyncio
+async def test_refresh_result_includes_timings_and_slow_accounts(tmp_path: Path) -> None:
+    settings = Settings(
+        _env_file=None,
+        monitor_refresh_interval_ms=999999,
+        monitor_history_window_days=3,
+        monitor_history_db_path=tmp_path / "history.db",
+    )
+    account1 = MonitorAccountConfig(
+        account_id="group_a.sub1",
+        child_account_id="sub1",
+        child_account_name="Sub One",
+        main_account_id="group_a",
+        main_account_name="Group A",
+        api_key="k1",
+        api_secret="s1",
+    )
+    account2 = MonitorAccountConfig(
+        account_id="group_a.sub2",
+        child_account_id="sub2",
+        child_account_name="Sub Two",
+        main_account_id="group_a",
+        main_account_name="Group A",
+        api_key="k2",
+        api_secret="s2",
+    )
+    settings.monitor_accounts = {account.account_id: account for account in (account1, account2)}
+    settings.monitor_main_accounts = {
+        "group_a": MainAccountConfig(main_id="group_a", name="Group A", children=(account1, account2)),
+    }
+    controller = AccountMonitorController(settings, gateway_factory=lambda selected: DiagnosticGateway(selected))
+    try:
+        refreshed = await controller.refresh_now()
+    finally:
+        await controller.close()
+
+    refresh_result = refreshed["refresh_result"]
+    assert refresh_result["success"] is True
+    assert refresh_result["fallback_section_count"] == 1
+    assert refresh_result["slow_accounts"] == [{"account_id": "group_a.sub2", "duration_ms": 41}, {"account_id": "group_a.sub1", "duration_ms": 17}]
+    assert refresh_result["timings"]["accounts"]["group_a.sub1"]["gateway_total_ms"] == 17
+    assert refresh_result["timings"]["accounts"]["group_a.sub2"]["gateway_total_ms"] == 41
+    assert refresh_result["timings"]["slowest_account_ms"] == 41
+    assert refresh_result["timings"]["collect_payload_ms"] >= 0
+    assert refresh_result["timings"]["broadcast_ms"] >= 0
 
 
 class TimeoutAfterFirstGateway(FakeMonitorGateway):

@@ -2,10 +2,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import httpx
 import pytest
 
 from monitor_app.config import MainAccountConfig, MonitorAccountConfig, Settings
-from monitor_app.funding_transfer import BinanceCredentials, FundingTransferError, FundingTransferService
+from monitor_app.funding_transfer import (
+    BinanceCredentials,
+    FundingTransferError,
+    FundingTransferRequestError,
+    FundingTransferService,
+)
 
 
 def _build_child(account_id: str, *, uid: str = "", api_key: str = "child-k", api_secret: str = "child-s") -> MonitorAccountConfig:
@@ -74,15 +80,27 @@ async def test_get_group_overview_marks_missing_uid_child_as_mode_specific_ineli
 
 
 @pytest.mark.asyncio
-async def test_get_group_overview_preserves_missing_uid_reason_when_spot_lookup_fails(tmp_path: Path) -> None:
-    missing_uid_child = _build_child("sub1", uid="")
-    service = _build_service(tmp_path, children=(missing_uid_child,))
+async def test_get_group_overview_uses_structured_request_error_context_when_main_query_fails(tmp_path: Path) -> None:
+    child = _build_child("sub1", uid="223456789")
+    service = _build_service(tmp_path, children=(child,))
 
     async def fake_get_sub_account_email_map(main_account: MainAccountConfig) -> dict[str, str]:
-        return {}
+        return {"223456789": "sub1@example.com"}
 
     async def fake_fetch_spot_assets(credentials: BinanceCredentials) -> list[dict[str, str]]:
-        raise FundingTransferError("boom")
+        if credentials.api_key == "main-k":
+            raise FundingTransferRequestError(
+                "spot account failed after 3 attempts: Binance network request failed: boom",
+                label="spot account",
+                attempts=3,
+                duration_ms=245,
+                timeout_s=1.2,
+                source="network",
+                error_type="ReadTimeout",
+                status_code=None,
+                retryable=True,
+            )
+        return [{"asset": "USDT", "free": "12.5", "locked": "0", "total": "12.5"}]
 
     service._get_sub_account_email_map = fake_get_sub_account_email_map  # type: ignore[method-assign]
     service._fetch_spot_assets = fake_fetch_spot_assets  # type: ignore[method-assign]
@@ -91,11 +109,88 @@ async def test_get_group_overview_preserves_missing_uid_reason_when_spot_lookup_
     finally:
         await service.close()
 
-    child = overview["children"][0]
-    assert child["can_distribute"] is False
-    assert child["can_collect"] is False
-    assert child["reason_distribute"] == "当前分组主账号归集 API 不可用"
-    assert child["reason_collect"] == "当前分组主账号归集 API 不可用"
+    assert overview["available"] is False
+    assert "Main transfer API unavailable" in overview["reason"]
+    assert overview["error_context"]["main_account_query"] == {
+        "label": "spot account",
+        "attempts": 3,
+        "duration_ms": 245,
+        "timeout_s": 1.2,
+        "source": "network",
+        "error_type": "ReadTimeout",
+        "status_code": None,
+        "retryable": True,
+    }
+    child_overview = overview["children"][0]
+    assert child_overview["can_distribute"] is False
+    assert child_overview["can_collect"] is False
+    assert child_overview["reason_distribute"] == "Main transfer API is unavailable for this group"
+
+
+@pytest.mark.asyncio
+async def test_signed_read_request_retries_before_succeeding(tmp_path: Path) -> None:
+    child = _build_child("sub1", uid="223456789")
+    service = _build_service(tmp_path, children=(child,))
+    attempts = 0
+
+    async def fake_signed_request_once(
+        credentials: BinanceCredentials,
+        method: str,
+        path: str,
+        params: dict[str, str] | None,
+        *,
+        timeout_s: float,
+    ):
+        nonlocal attempts
+        attempts += 1
+        assert path == "/api/v3/account"
+        if attempts < 3:
+            raise httpx.ReadTimeout("temporary", request=httpx.Request("GET", f"https://example.com{path}"))
+        return {"balances": [{"asset": "USDT", "free": "5", "locked": "1"}]}
+
+    service._signed_request_once = fake_signed_request_once  # type: ignore[method-assign]
+    try:
+        assets = await service._fetch_spot_assets(BinanceCredentials(api_key="main-k", api_secret="main-s"))
+    finally:
+        await service.close()
+
+    assert attempts == 3
+    assert assets == [{"asset": "USDT", "free": "5", "locked": "1", "total": "6"}]
+
+
+@pytest.mark.asyncio
+async def test_signed_read_request_returns_structured_error_after_retry_exhausted(tmp_path: Path) -> None:
+    child = _build_child("sub1", uid="223456789")
+    service = _build_service(tmp_path, children=(child,))
+    attempts = 0
+
+    async def fake_signed_request_once(
+        credentials: BinanceCredentials,
+        method: str,
+        path: str,
+        params: dict[str, str] | None,
+        *,
+        timeout_s: float,
+    ):
+        nonlocal attempts
+        attempts += 1
+        raise httpx.ReadTimeout("temporary", request=httpx.Request("GET", f"https://example.com{path}"))
+
+    service._signed_request_once = fake_signed_request_once  # type: ignore[method-assign]
+    try:
+        with pytest.raises(FundingTransferRequestError) as exc_info:
+            await service._fetch_spot_assets(BinanceCredentials(api_key="main-k", api_secret="main-s"))
+    finally:
+        await service.close()
+
+    exc = exc_info.value
+    assert attempts == service._settings.binance_secondary_retry_attempts
+    assert exc.label == "spot account"
+    assert exc.attempts == service._settings.binance_secondary_retry_attempts
+    assert exc.source == "network"
+    assert exc.error_type == "ReadTimeout"
+    assert exc.retryable is True
+    assert exc.duration_ms >= 0
 
 
 @pytest.mark.asyncio
@@ -129,6 +224,8 @@ async def test_distribute_runs_single_spot_transfer_from_main_to_child(tmp_path:
         await service.close()
 
     assert result["direction"] == "distribute"
+    assert result["request_id"]
+    assert result["timings"]["transfer_ms"] >= 0
     assert result["results"][0]["success"] is True
     assert calls == [
         (
@@ -137,6 +234,42 @@ async def test_distribute_runs_single_spot_transfer_from_main_to_child(tmp_path:
             {"toEmail": "sub1@example.com", "fromAccountType": "SPOT", "toAccountType": "SPOT", "asset": "USDT", "amount": "12.5"},
         )
     ]
+
+
+@pytest.mark.asyncio
+async def test_distribute_does_not_retry_real_transfer_post(tmp_path: Path) -> None:
+    child = _build_child("sub1", uid="223456789")
+    service = _build_service(tmp_path, children=(child,))
+    calls = 0
+
+    async def fake_get_sub_account_email_map(main_account: MainAccountConfig) -> dict[str, str]:
+        return {"223456789": "sub1@example.com"}
+
+    async def fake_fetch_spot_assets(credentials: BinanceCredentials) -> list[dict[str, str]]:
+        if credentials.api_key == "main-k":
+            return [{"asset": "USDT", "free": "120", "locked": "0", "total": "120"}]
+        return [{"asset": "USDT", "free": "6", "locked": "0", "total": "6"}]
+
+    async def fake_signed_request(credentials: BinanceCredentials, method: str, path: str, params: dict[str, str] | None = None):
+        nonlocal calls
+        calls += 1
+        raise FundingTransferError("Binance returned an error: insufficient permission")
+
+    service._get_sub_account_email_map = fake_get_sub_account_email_map  # type: ignore[method-assign]
+    service._fetch_spot_assets = fake_fetch_spot_assets  # type: ignore[method-assign]
+    service._signed_request = fake_signed_request  # type: ignore[method-assign]
+    try:
+        result = await service.distribute(
+            "group_a",
+            asset="USDT",
+            transfers=[{"account_id": "group_a.sub1", "amount": "12.5"}],
+        )
+    finally:
+        await service.close()
+
+    assert calls == 1
+    assert result["results"][0]["success"] is False
+    assert "insufficient permission" in result["results"][0]["message"]
 
 
 @pytest.mark.asyncio
@@ -197,7 +330,7 @@ async def test_collect_rejects_when_requested_amount_exceeds_available_spot_bala
     service._get_sub_account_email_map = fake_get_sub_account_email_map  # type: ignore[method-assign]
     service._fetch_spot_assets = fake_fetch_spot_assets  # type: ignore[method-assign]
     try:
-        with pytest.raises(FundingTransferError, match="最大可归集 8.75"):
+        with pytest.raises(FundingTransferError, match="can collect at most 8.75 USDT"):
             await service.collect(
                 "group_a",
                 asset="USDT",
@@ -248,7 +381,7 @@ async def test_distribute_rejects_when_group_has_no_transfer_api(tmp_path: Path)
     child = _build_child("sub1", uid="223456789")
     service = _build_service(tmp_path, children=(child,), with_main_transfer=False)
     try:
-        with pytest.raises(FundingTransferError, match="主账号归集 API"):
+        with pytest.raises(FundingTransferError, match="Main transfer API is not configured for this group"):
             await service.distribute("group_a", asset="USDT", transfers=[{"account_id": "group_a.sub1", "amount": "1"}])
     finally:
         await service.close()

@@ -163,6 +163,8 @@ class AccountMonitorController:
                 "refresh_id": exc.refresh_id,
                 "failed_accounts": [],
                 "fallback_sections": [],
+                "fallback_section_count": 0,
+                "slow_accounts": [],
                 "timings": {"total_ms": exc.duration_ms},
             }
             payload["refresh_result"]["message"] = "刷新超时，已保留当前数据"
@@ -179,6 +181,8 @@ class AccountMonitorController:
                 "refresh_id": refresh_id,
                 "failed_accounts": [],
                 "fallback_sections": [],
+                "fallback_section_count": 0,
+                "slow_accounts": [],
                 "timings": {"total_ms": duration_ms},
             }
             return payload
@@ -197,6 +201,8 @@ class AccountMonitorController:
             "refresh_id": refresh_meta.get("refresh_id", refresh_id),
             "failed_accounts": refresh_meta.get("failed_accounts", []),
             "fallback_sections": refresh_meta.get("fallback_sections", []),
+            "fallback_section_count": int(refresh_meta.get("fallback_section_count") or 0),
+            "slow_accounts": refresh_meta.get("slow_accounts", []),
             "timings": refresh_meta.get("timings", {"total_ms": duration_ms}),
         }
         if not committed:
@@ -271,29 +277,41 @@ class AccountMonitorController:
                     duration_ms,
                 )
                 raise RefreshTimeoutError(duration_ms, refresh_id=refresh_id) from exc
-            duration_ms = int((perf_counter() - started_at) * 1000)
+            collect_payload_ms = int((perf_counter() - started_at) * 1000)
             payload.setdefault("refresh_meta", {})
             payload["refresh_meta"].setdefault("timings", {})
-            payload["refresh_meta"]["timings"]["total_ms"] = duration_ms
+            payload["refresh_meta"]["timings"]["collect_payload_ms"] = collect_payload_ms
             payload["refresh_meta"]["reason"] = reason
             if self._should_commit_payload(payload):
+                broadcast_started_at = perf_counter()
                 self._last_payload = payload
                 await self._broadcast(payload)
+                broadcast_ms = int((perf_counter() - broadcast_started_at) * 1000)
+                duration_ms = int((perf_counter() - started_at) * 1000)
+                payload["refresh_meta"]["timings"]["broadcast_ms"] = broadcast_ms
+                payload["refresh_meta"]["timings"]["total_ms"] = duration_ms
                 logger.info(
-                    "Refresh committed refresh_id=%s reason=%s duration_ms=%s success_count=%s error_count=%s fallback_count=%s",
+                    "Refresh committed refresh_id=%s reason=%s duration_ms=%s collect_payload_ms=%s broadcast_ms=%s success_count=%s error_count=%s fallback_count=%s slowest_account_ms=%s",
                     refresh_id,
                     reason,
                     duration_ms,
+                    collect_payload_ms,
+                    broadcast_ms,
                     payload.get("summary", {}).get("success_count", 0),
                     payload.get("summary", {}).get("error_count", 0),
                     len(payload.get("refresh_meta", {}).get("fallback_sections", [])),
+                    payload.get("refresh_meta", {}).get("timings", {}).get("slowest_account_ms", 0),
                 )
                 return payload, True
+            duration_ms = int((perf_counter() - started_at) * 1000)
+            payload["refresh_meta"]["timings"]["broadcast_ms"] = 0
+            payload["refresh_meta"]["timings"]["total_ms"] = duration_ms
             logger.warning(
-                "Refresh preserved previous payload refresh_id=%s reason=%s duration_ms=%s failed_accounts=%s",
+                "Refresh preserved previous payload refresh_id=%s reason=%s duration_ms=%s collect_payload_ms=%s failed_accounts=%s",
                 refresh_id,
                 reason,
                 duration_ms,
+                collect_payload_ms,
                 payload.get("refresh_meta", {}).get("failed_accounts", []),
             )
             return payload, False
@@ -446,12 +464,21 @@ class AccountMonitorController:
         failed_accounts: list[dict[str, Any]] = []
         fallback_sections: list[dict[str, Any]] = []
         timings: dict[str, Any] = {"accounts": {}}
+        slow_accounts: list[dict[str, Any]] = []
         for account in accounts:
             account_id = str(account.get("account_id") or "")
             diagnostics = account.get("diagnostics") or {}
             account_timings = diagnostics.get("timings") or {}
             if account_id:
                 timings["accounts"][account_id] = account_timings
+            account_duration_ms = self._account_duration_ms(account_timings)
+            if account_id and account_duration_ms > 0:
+                slow_accounts.append(
+                    {
+                        "account_id": account_id,
+                        "duration_ms": account_duration_ms,
+                    }
+                )
             if account.get("status") != "ok":
                 failed_accounts.append(
                     {
@@ -471,12 +498,23 @@ class AccountMonitorController:
                         "sections": sections,
                     }
                 )
+        slow_accounts.sort(key=lambda item: int(item.get("duration_ms") or 0), reverse=True)
+        timings["slowest_account_ms"] = int(slow_accounts[0]["duration_ms"]) if slow_accounts else 0
         return {
             "refresh_id": refresh_id,
             "failed_accounts": failed_accounts,
             "fallback_sections": fallback_sections,
+            "fallback_section_count": len(fallback_sections),
+            "slow_accounts": slow_accounts[:3],
             "timings": timings,
         }
+
+    def _account_duration_ms(self, account_timings: dict[str, Any]) -> int:
+        numeric_values: list[int] = []
+        for value in account_timings.values():
+            if isinstance(value, (int, float)):
+                numeric_values.append(int(value))
+        return max(numeric_values, default=0)
 
     def _should_commit_payload(self, payload: dict[str, Any]) -> bool:
         summary = payload.get("summary") or {}
