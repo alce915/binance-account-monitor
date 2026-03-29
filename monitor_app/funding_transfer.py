@@ -41,39 +41,31 @@ class FundingTransferService:
         main_account = self._get_main_account(main_id)
         email_by_uid: dict[str, str] = {}
         main_reason = ""
-        main_funding_assets: list[dict[str, str]] = []
+        main_spot_assets: list[dict[str, str]] = []
 
         if main_account.has_transfer_credentials:
             try:
                 email_by_uid = await self._get_sub_account_email_map(main_account)
-                main_funding_assets = await self._fetch_funding_assets(
-                    self._main_credentials(main_account),
-                )
+                main_spot_assets = await self._fetch_spot_assets(self._main_credentials(main_account))
             except Exception as exc:
                 main_reason = f"主账号归集 API 不可用：{exc}"
         else:
             main_reason = "当前分组未配置主账号归集 API（Excel 需提供 account_id=main 行）"
 
         children = await asyncio.gather(
-            *(self._build_child_overview(main_account, child, email_by_uid, main_reason == "") for child in main_account.children)
+            *(self._build_child_overview(child, email_by_uid, main_ready=main_reason == "") for child in main_account.children)
         )
-        selectable_children = [child for child in children if child["eligible"]]
+
+        main_spot_available = self._spot_available_map(main_spot_assets)
         assets = sorted(
             {
-                *(row["asset"] for row in main_funding_assets),
-                *(
-                    asset
-                    for child in children
-                    for asset in child["funding_available"].keys()
-                ),
+                *main_spot_available.keys(),
+                *(asset for child in children for asset in child["spot_available"].keys()),
             }
         )
-        available = main_reason == "" and bool(selectable_children)
-        reason = main_reason or (
-            "当前分组暂无可操作子账号，请检查子账号 UID 是否填写且主账号 API 能识别该 UID"
-            if not selectable_children
-            else ""
-        )
+        any_executable = any(child["can_distribute"] or child["can_collect"] for child in children)
+        available = main_reason == "" and any_executable
+        reason = main_reason or ("" if any_executable else "当前分组暂无可操作子账号，请检查 UID、子账号 API 或现货余额")
 
         return {
             "main_account_id": main_account.main_id,
@@ -85,8 +77,10 @@ class FundingTransferService:
                 "uid": main_account.transfer_uid,
                 "transfer_ready": main_reason == "",
                 "reason": main_reason,
-                "funding_assets": main_funding_assets,
-                "funding_available": self._funding_available_map(main_funding_assets),
+                "spot_assets": main_spot_assets,
+                "spot_available": main_spot_available,
+                "funding_assets": main_spot_assets,
+                "funding_available": main_spot_available,
             },
             "children": children,
             "updated_at": datetime.now(UTC).isoformat(),
@@ -101,8 +95,8 @@ class FundingTransferService:
         email_by_uid = await self._get_sub_account_email_map(main_account)
         child_by_id = {child.account_id: child for child in main_account.children}
         main_credentials = self._main_credentials(main_account)
-        main_funding_assets = await self._fetch_funding_assets(main_credentials)
-        main_available = Decimal(self._funding_available_map(main_funding_assets).get(normalized_asset, "0"))
+        main_spot_assets = await self._fetch_spot_assets(main_credentials)
+        main_available = Decimal(self._spot_available_map(main_spot_assets).get(normalized_asset, "0"))
 
         executable: list[tuple[MonitorAccountConfig, str, Decimal]] = []
         total_amount = Decimal("0")
@@ -119,24 +113,22 @@ class FundingTransferService:
             total_amount += amount
 
         if not executable:
-            raise FundingTransferError("请至少勾选一个子账号并填写大于 0 的金额")
+            raise FundingTransferError("请至少勾选一个子账号并填写大于 0 的分发金额")
         if total_amount > main_available:
             raise FundingTransferError(
-                f"主账号 Funding 可用余额不足：{normalized_asset} 仅有 {self._format_decimal(main_available)}"
+                f"主账号现货可用余额不足：{normalized_asset} 仅有 {self._format_decimal(main_available)}"
             )
 
-        results: list[dict[str, Any]] = []
-        for child, child_email, amount in executable:
-            results.append(
-                await self._distribute_to_child(
-                    main_account=main_account,
-                    main_credentials=main_credentials,
-                    child=child,
-                    child_email=child_email,
-                    asset=normalized_asset,
-                    amount=amount,
-                )
+        results = [
+            await self._distribute_to_child(
+                main_credentials=main_credentials,
+                child=child,
+                child_email=child_email,
+                asset=normalized_asset,
+                amount=amount,
             )
+            for child, child_email, amount in executable
+        ]
 
         overview = await self.get_group_overview(main_id)
         return {
@@ -147,7 +139,14 @@ class FundingTransferService:
             "message": self._summarize_operation("分发", results),
         }
 
-    async def collect(self, main_id: str, *, asset: str, account_ids: list[str]) -> dict[str, Any]:
+    async def collect(
+        self,
+        main_id: str,
+        *,
+        asset: str,
+        transfers: list[dict[str, Any]] | None = None,
+        account_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
         normalized_asset = self._normalize_asset(asset)
         main_account = self._get_main_account(main_id)
         if not main_account.has_transfer_credentials:
@@ -156,24 +155,71 @@ class FundingTransferService:
         email_by_uid = await self._get_sub_account_email_map(main_account)
         child_by_id = {child.account_id: child for child in main_account.children}
         main_credentials = self._main_credentials(main_account)
-        selected_ids = [str(account_id or "").strip().lower() for account_id in account_ids if str(account_id or "").strip()]
-        if not selected_ids:
-            raise FundingTransferError("请至少勾选一个子账号")
+        requested_transfers = list(transfers or [])
+        legacy_account_ids = [str(account_id or "").strip().lower() for account_id in (account_ids or []) if str(account_id or "").strip()]
 
         results: list[dict[str, Any]] = []
-        for account_id in selected_ids:
-            child = child_by_id.get(account_id)
-            if child is None:
-                raise FundingTransferError(f"未知子账号：{account_id}")
-            child_email = self._resolve_child_email(child, email_by_uid)
-            results.append(
+        if requested_transfers:
+            executable: list[tuple[MonitorAccountConfig, str, Decimal]] = []
+            for item in requested_transfers:
+                account_id = str(item.get("account_id") or "").strip().lower()
+                amount = self._parse_positive_amount(item.get("amount"), field_name=f"amount for {account_id}")
+                if amount <= Decimal("0"):
+                    continue
+                child = child_by_id.get(account_id)
+                if child is None:
+                    raise FundingTransferError(f"未知子账号：{account_id}")
+                child_email = self._resolve_child_email(child, email_by_uid)
+                available_amount = await self._collectable_amount(child, normalized_asset)
+                if amount > available_amount:
+                    raise FundingTransferError(
+                        f"子账号 {child.child_account_name or child.account_id} 的 {normalized_asset} 最大可归集 {self._format_decimal(available_amount)}"
+                    )
+                executable.append((child, child_email, amount))
+
+            if not executable:
+                raise FundingTransferError("请至少勾选一个子账号并填写大于 0 的归集金额")
+
+            results = [
                 await self._collect_from_child(
                     main_credentials=main_credentials,
                     child=child,
                     child_email=child_email,
                     asset=normalized_asset,
+                    amount=amount,
                 )
-            )
+                for child, child_email, amount in executable
+            ]
+        else:
+            if not legacy_account_ids:
+                raise FundingTransferError("请至少勾选一个子账号")
+
+            for account_id in legacy_account_ids:
+                child = child_by_id.get(account_id)
+                if child is None:
+                    raise FundingTransferError(f"未知子账号：{account_id}")
+                child_email = self._resolve_child_email(child, email_by_uid)
+                try:
+                    available_amount = await self._collectable_amount(child, normalized_asset)
+                except FundingTransferError as exc:
+                    result = self._base_result(child, "0")
+                    result["message"] = str(exc)
+                    results.append(result)
+                    continue
+                if available_amount <= Decimal("0"):
+                    result = self._base_result(child, "0")
+                    result["message"] = "当前代币在子账号现货中无可归集余额"
+                    results.append(result)
+                    continue
+                results.append(
+                    await self._collect_from_child(
+                        main_credentials=main_credentials,
+                        child=child,
+                        child_email=child_email,
+                        asset=normalized_asset,
+                        amount=available_amount,
+                    )
+                )
 
         overview = await self.get_group_overview(main_id)
         return {
@@ -186,68 +232,66 @@ class FundingTransferService:
 
     async def _build_child_overview(
         self,
-        main_account: MainAccountConfig,
         child: MonitorAccountConfig,
         email_by_uid: dict[str, str],
+        *,
         main_ready: bool,
     ) -> dict[str, Any]:
-        child_reason = ""
-        eligible = True
-        if not child.uid:
-            eligible = False
-            child_reason = "未配置子账号 UID"
-        elif main_ready and child.uid not in email_by_uid:
-            eligible = False
-            child_reason = "主账号 API 未识别该 UID 对应的子账号"
+        spot_assets: list[dict[str, str]] = []
+        spot_reason = ""
 
-        funding_assets: list[dict[str, str]] = []
         if child.api_key and child.api_secret:
             try:
-                funding_assets = await self._fetch_funding_assets(self._child_credentials(child))
+                spot_assets = await self._fetch_spot_assets(self._child_credentials(child))
             except Exception as exc:
-                eligible = False
-                if not child_reason:
-                    child_reason = f"Funding 余额查询失败：{exc}"
+                spot_reason = f"现货余额查询失败：{exc}"
         else:
-            eligible = False
-            if not child_reason:
-                child_reason = "未配置子账号 API"
+            spot_reason = "未配置子账号 API"
+
+        transfer_reason = ""
+        if not main_ready:
+            transfer_reason = "当前分组主账号归集 API 不可用"
+        elif not child.uid:
+            transfer_reason = "未配置子账号 UID"
+        elif child.uid not in email_by_uid:
+            transfer_reason = "主账号 API 未识别该 UID 对应的子账号"
+
+        can_distribute = transfer_reason == ""
+        can_collect = transfer_reason == "" and spot_reason == ""
+        reason_distribute = "" if can_distribute else transfer_reason
+        reason_collect = "" if can_collect else (transfer_reason or spot_reason)
+        spot_available = self._spot_available_map(spot_assets)
 
         return {
             "account_id": child.account_id,
             "child_account_id": child.child_account_id,
             "name": child.child_account_name,
             "uid": child.uid,
-            "eligible": main_ready and eligible,
-            "reason": "" if main_ready and eligible else (child_reason or "当前分组主账号归集 API 不可用"),
-            "funding_assets": funding_assets,
-            "funding_available": self._funding_available_map(funding_assets),
+            "eligible": can_distribute or can_collect,
+            "reason": reason_collect or reason_distribute,
+            "can_distribute": can_distribute,
+            "can_collect": can_collect,
+            "reason_distribute": reason_distribute,
+            "reason_collect": reason_collect,
+            "spot_assets": spot_assets,
+            "spot_available": spot_available,
+            "funding_assets": spot_assets,
+            "funding_available": spot_available,
         }
 
     async def _distribute_to_child(
         self,
         *,
-        main_account: MainAccountConfig,
         main_credentials: BinanceCredentials,
         child: MonitorAccountConfig,
         child_email: str,
         asset: str,
         amount: Decimal,
     ) -> dict[str, Any]:
-        child_credentials = self._child_credentials(child)
         amount_text = self._format_decimal(amount)
         result = self._base_result(child, amount_text)
-        moved_main_to_spot = False
-        moved_main_to_child = False
 
         try:
-            await self._signed_request(
-                main_credentials,
-                "POST",
-                "/sapi/v1/asset/transfer",
-                {"type": "FUNDING_MAIN", "asset": asset, "amount": amount_text},
-            )
-            moved_main_to_spot = True
             await self._signed_request(
                 main_credentials,
                 "POST",
@@ -260,28 +304,11 @@ class FundingTransferService:
                     "amount": amount_text,
                 },
             )
-            moved_main_to_child = True
-            await self._signed_request(
-                child_credentials,
-                "POST",
-                "/sapi/v1/asset/transfer",
-                {"type": "MAIN_FUNDING", "asset": asset, "amount": amount_text},
-            )
             result["success"] = True
             result["message"] = "分发成功"
-            return result
         except Exception as exc:
-            rollback_message = await self._rollback_distribution(
-                main_credentials=main_credentials,
-                child_email=child_email,
-                asset=asset,
-                amount_text=amount_text,
-                moved_main_to_spot=moved_main_to_spot,
-                moved_main_to_child=moved_main_to_child,
-            )
-            result["success"] = False
-            result["message"] = f"分发失败：{exc}{rollback_message}"
-            return result
+            result["message"] = f"分发失败：{exc}"
+        return result
 
     async def _collect_from_child(
         self,
@@ -290,28 +317,15 @@ class FundingTransferService:
         child: MonitorAccountConfig,
         child_email: str,
         asset: str,
+        amount: Decimal,
     ) -> dict[str, Any]:
-        child_credentials = self._child_credentials(child)
-        child_funding_assets = await self._fetch_funding_assets(child_credentials)
-        available_amount = Decimal(self._funding_available_map(child_funding_assets).get(asset, "0"))
-        amount_text = self._format_decimal(available_amount)
+        amount_text = self._format_decimal(amount)
         result = self._base_result(child, amount_text)
-        moved_child_to_spot = False
-        moved_child_to_main = False
-
-        if available_amount <= Decimal("0"):
-            result["success"] = False
-            result["message"] = "当前代币在子账号 Funding 中无可归集余额"
+        if amount <= Decimal("0"):
+            result["message"] = "当前代币在子账号现货中无可归集余额"
             return result
 
         try:
-            await self._signed_request(
-                child_credentials,
-                "POST",
-                "/sapi/v1/asset/transfer",
-                {"type": "FUNDING_MAIN", "asset": asset, "amount": amount_text},
-            )
-            moved_child_to_spot = True
             await self._signed_request(
                 main_credentials,
                 "POST",
@@ -324,100 +338,20 @@ class FundingTransferService:
                     "amount": amount_text,
                 },
             )
-            moved_child_to_main = True
-            await self._signed_request(
-                main_credentials,
-                "POST",
-                "/sapi/v1/asset/transfer",
-                {"type": "MAIN_FUNDING", "asset": asset, "amount": amount_text},
-            )
             result["success"] = True
             result["message"] = "归集成功"
-            return result
         except Exception as exc:
-            rollback_message = await self._rollback_collect(
-                main_credentials=main_credentials,
-                child_credentials=child_credentials,
-                child_email=child_email,
-                asset=asset,
-                amount_text=amount_text,
-                moved_child_to_spot=moved_child_to_spot,
-                moved_child_to_main=moved_child_to_main,
-            )
-            result["success"] = False
-            result["message"] = f"归集失败：{exc}{rollback_message}"
-            return result
+            result["message"] = f"归集失败：{exc}"
+        return result
 
-    async def _rollback_distribution(
-        self,
-        *,
-        main_credentials: BinanceCredentials,
-        child_email: str,
-        asset: str,
-        amount_text: str,
-        moved_main_to_spot: bool,
-        moved_main_to_child: bool,
-    ) -> str:
+    async def _collectable_amount(self, child: MonitorAccountConfig, asset: str) -> Decimal:
+        if not child.api_key or not child.api_secret:
+            raise FundingTransferError(f"子账号 {child.child_account_name or child.account_id} 未配置子账号 API")
         try:
-            if moved_main_to_child:
-                await self._signed_request(
-                    main_credentials,
-                    "POST",
-                    "/sapi/v1/sub-account/universalTransfer",
-                    {
-                        "fromEmail": child_email,
-                        "fromAccountType": "SPOT",
-                        "toAccountType": "SPOT",
-                        "asset": asset,
-                        "amount": amount_text,
-                    },
-                )
-            if moved_main_to_spot:
-                await self._signed_request(
-                    main_credentials,
-                    "POST",
-                    "/sapi/v1/asset/transfer",
-                    {"type": "MAIN_FUNDING", "asset": asset, "amount": amount_text},
-                )
+            child_spot_assets = await self._fetch_spot_assets(self._child_credentials(child))
         except Exception as exc:
-            return f"；回滚失败，资金可能停留在中间账户：{exc}"
-        return "；已尝试回滚到主账号 Funding"
-
-    async def _rollback_collect(
-        self,
-        *,
-        main_credentials: BinanceCredentials,
-        child_credentials: BinanceCredentials,
-        child_email: str,
-        asset: str,
-        amount_text: str,
-        moved_child_to_spot: bool,
-        moved_child_to_main: bool,
-    ) -> str:
-        try:
-            if moved_child_to_main:
-                await self._signed_request(
-                    main_credentials,
-                    "POST",
-                    "/sapi/v1/sub-account/universalTransfer",
-                    {
-                        "toEmail": child_email,
-                        "fromAccountType": "SPOT",
-                        "toAccountType": "SPOT",
-                        "asset": asset,
-                        "amount": amount_text,
-                    },
-                )
-            if moved_child_to_spot:
-                await self._signed_request(
-                    child_credentials,
-                    "POST",
-                    "/sapi/v1/asset/transfer",
-                    {"type": "MAIN_FUNDING", "asset": asset, "amount": amount_text},
-                )
-        except Exception as exc:
-            return f"；回滚失败，资金可能已留在主账号现货或子账号现货：{exc}"
-        return "；已尝试回滚到子账号 Funding"
+            raise FundingTransferError(f"子账号 {child.child_account_name or child.account_id} 现货余额查询失败：{exc}") from exc
+        return Decimal(self._spot_available_map(child_spot_assets).get(asset, "0"))
 
     async def _get_sub_account_email_map(self, main_account: MainAccountConfig) -> dict[str, str]:
         credentials = self._main_credentials(main_account)
@@ -448,16 +382,11 @@ class FundingTransferService:
             page += 1
         return result
 
-    async def _fetch_funding_assets(self, credentials: BinanceCredentials) -> list[dict[str, str]]:
-        payload = await self._signed_request(
-            credentials,
-            "POST",
-            "/sapi/v1/asset/get-funding-asset",
-            {"needBtcValuation": "false"},
-        )
-        rows = payload if isinstance(payload, list) else []
+    async def _fetch_spot_assets(self, credentials: BinanceCredentials) -> list[dict[str, str]]:
+        payload = await self._signed_request(credentials, "GET", "/api/v3/account")
+        rows = payload.get("balances") if isinstance(payload, dict) else []
         assets: list[dict[str, str]] = []
-        for item in rows:
+        for item in rows if isinstance(rows, list) else []:
             if not isinstance(item, dict):
                 continue
             asset = str(item.get("asset") or "").strip().upper()
@@ -465,9 +394,7 @@ class FundingTransferService:
                 continue
             free = Decimal(str(item.get("free") or "0"))
             locked = Decimal(str(item.get("locked") or "0"))
-            freeze = Decimal(str(item.get("freeze") or "0"))
-            withdrawing = Decimal(str(item.get("withdrawing") or "0"))
-            total = free + locked + freeze + withdrawing
+            total = free + locked
             if total <= Decimal("0"):
                 continue
             assets.append(
@@ -475,8 +402,6 @@ class FundingTransferService:
                     "asset": asset,
                     "free": self._format_decimal(free),
                     "locked": self._format_decimal(locked),
-                    "freeze": self._format_decimal(freeze),
-                    "withdrawing": self._format_decimal(withdrawing),
                     "total": self._format_decimal(total),
                 }
             )
@@ -558,7 +483,7 @@ class FundingTransferService:
             "message": "",
         }
 
-    def _funding_available_map(self, assets: list[dict[str, str]]) -> dict[str, str]:
+    def _spot_available_map(self, assets: list[dict[str, str]]) -> dict[str, str]:
         return {asset["asset"]: asset["free"] for asset in assets}
 
     def _normalize_asset(self, asset: Any) -> str:

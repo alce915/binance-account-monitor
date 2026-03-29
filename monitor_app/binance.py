@@ -276,22 +276,13 @@ class BinanceMonitorGateway:
                 label="spot account",
             )
         )
-        funding_task = asyncio.create_task(
-            self._optional_request_sapi_post_with_retry(
-                "/sapi/v1/asset/get-funding-asset",
-                {"needBtcValuation": "false"},
-                label="funding assets",
-            )
-        )
         secondary_started_at = perf_counter()
         (
             (distribution_summary, distribution_error),
             (spot_account_payload, spot_error),
-            (funding_assets_payload, funding_error),
         ) = await asyncio.gather(
             distribution_task,
             spot_task,
-            funding_task,
         )
         income_summary, income_error = await self._resolve_income_summary(
             cached_income_summary=cached_income_summary,
@@ -311,15 +302,11 @@ class BinanceMonitorGateway:
         )
         timings["profit_summary_ms"] = int((perf_counter() - distribution_profit_started_at) * 1000)
         previous_spot_balances = self._extract_previous_spot_balances(previous_snapshot)
-        previous_funding_assets = self._extract_previous_funding_assets(previous_snapshot)
         if spot_account_payload is not None:
             spot_balances = self._parse_spot_balances(spot_account_payload)
         else:
             spot_balances = previous_spot_balances
-        if funding_assets_payload is not None:
-            funding_assets = self._parse_funding_assets(funding_assets_payload)
-        else:
-            funding_assets = previous_funding_assets
+        spot_assets = self._spot_assets_from_balances(spot_balances)
         assets = self._parse_assets(um_account_payload.get("assets", []), spot_balances)
 
         unrealized_pnl = sum((entry["unrealized_pnl"] for entry in positions), Decimal("0"))
@@ -347,12 +334,6 @@ class BinanceMonitorGateway:
                 spot_error,
                 used_fallback=bool(previous_spot_balances),
                 stale=bool(previous_spot_balances),
-            )
-        if funding_error is not None:
-            section_errors["funding_assets"] = self._build_section_error(
-                funding_error,
-                used_fallback=bool(previous_funding_assets),
-                stale=bool(previous_funding_assets),
             )
         if mark_price_result["error"] is not None:
             section_errors["mark_prices"] = self._build_section_error(
@@ -414,7 +395,7 @@ class BinanceMonitorGateway:
             },
             "positions": positions,
             "assets": assets,
-            "funding_assets": funding_assets,
+            "spot_assets": spot_assets,
             "income_summary": income_summary,
             "distribution_summary": distribution_summary,
             "distribution_profit_summary": distribution_profit_summary,
@@ -1414,6 +1395,27 @@ class BinanceMonitorGateway:
     def _extract_previous_spot_balances(self, previous_snapshot: dict[str, Any] | None) -> dict[str, dict[str, Decimal]]:
         if not isinstance(previous_snapshot, dict):
             return {}
+        spot_rows = previous_snapshot.get("spot_assets")
+        if isinstance(spot_rows, list):
+            balances: dict[str, dict[str, Decimal]] = {}
+            for item in spot_rows:
+                if not isinstance(item, dict):
+                    continue
+                asset = str(item.get("asset") or "")
+                if not asset:
+                    continue
+                free_balance = Decimal(str(item.get("free") or "0"))
+                locked_balance = Decimal(str(item.get("locked") or "0"))
+                total_balance = Decimal(str(item.get("total") or free_balance + locked_balance))
+                if total_balance == Decimal("0"):
+                    continue
+                balances[asset] = {
+                    "free": free_balance,
+                    "locked": locked_balance,
+                    "total": total_balance,
+                }
+            if balances:
+                return balances
         balances: dict[str, dict[str, Decimal]] = {}
         for item in previous_snapshot.get("assets", []) or []:
             if not isinstance(item, dict):
@@ -1436,6 +1438,25 @@ class BinanceMonitorGateway:
                     "total": spot_balance,
                 }
         return balances
+
+    def _spot_assets_from_balances(self, spot_balances: dict[str, dict[str, Decimal]] | None) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for asset, values in (spot_balances or {}).items():
+            free_balance = Decimal(str(values.get("free") or "0"))
+            locked_balance = Decimal(str(values.get("locked") or "0"))
+            total_balance = Decimal(str(values.get("total") or "0"))
+            if total_balance == Decimal("0"):
+                continue
+            rows.append(
+                {
+                    "asset": asset,
+                    "free": free_balance,
+                    "locked": locked_balance,
+                    "total": total_balance,
+                }
+            )
+        rows.sort(key=lambda entry: entry["asset"])
+        return rows
 
     def _extract_previous_funding_assets(self, previous_snapshot: dict[str, Any] | None) -> list[dict[str, Any]]:
         if not isinstance(previous_snapshot, dict):

@@ -53,7 +53,7 @@ class FakeImportGateway:
             },
             "positions": [],
             "assets": [],
-            "funding_assets": [],
+            "spot_assets": [],
             "income_summary": {
                 "window_days": history_window_days,
                 "records": 0,

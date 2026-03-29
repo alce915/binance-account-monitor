@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from monitor_app.account_monitor import AccountMonitorController
 from monitor_app.account_import import (
@@ -52,9 +52,15 @@ class FundingDistributeRequest(BaseModel):
     transfers: list[FundingDistributeItem]
 
 
+class FundingCollectItem(BaseModel):
+    account_id: str
+    amount: str
+
+
 class FundingCollectRequest(BaseModel):
     asset: str
-    account_ids: list[str]
+    transfers: list[FundingCollectItem] = Field(default_factory=list)
+    account_ids: list[str] = Field(default_factory=list)
 
 
 @app.get("/", include_in_schema=False)
@@ -153,6 +159,7 @@ async def collect_group_funding(main_id: str, payload: FundingCollectRequest) ->
         return await funding_transfer.collect(
             main_id,
             asset=payload.asset,
+            transfers=[item.model_dump() for item in payload.transfers],
             account_ids=payload.account_ids,
         )
     except FundingTransferError as exc:

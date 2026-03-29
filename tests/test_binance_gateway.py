@@ -162,22 +162,24 @@ async def test_get_unified_account_snapshot_aggregates_distribution_and_assets(t
     assert len(snapshot["positions"]) == 2
     assert snapshot["positions"][0]["mark_price"] == Decimal("80500")
     assert snapshot["positions"][1]["mark_price"] == Decimal("1995")
-    assert snapshot["funding_assets"] == [
+    assert snapshot["spot_assets"] == [
+        {
+            "asset": "BNB",
+            "free": Decimal("1.0"),
+            "locked": Decimal("0.25"),
+            "total": Decimal("1.25"),
+        },
         {
             "asset": "RWUSD",
-            "free": Decimal("2.5"),
-            "locked": Decimal("0.5"),
-            "freeze": Decimal("0"),
-            "withdrawing": Decimal("0"),
-            "total": Decimal("3.0"),
+            "free": Decimal("0"),
+            "locked": Decimal("0.64438356"),
+            "total": Decimal("0.64438356"),
         },
         {
             "asset": "USDT",
-            "free": Decimal("15"),
-            "locked": Decimal("0"),
-            "freeze": Decimal("0"),
-            "withdrawing": Decimal("0"),
-            "total": Decimal("15"),
+            "free": Decimal("100"),
+            "locked": Decimal("50"),
+            "total": Decimal("150"),
         },
     ]
     rwusd_asset = next(item for item in snapshot["assets"] if item["asset"] == "RWUSD")
@@ -403,11 +405,14 @@ async def test_refresh_income_history_paginates_when_window_hits_limit(tmp_path:
             api_secret="s",
         ),
     )
-    end_time = 3_000
+    end_time = int(datetime.now(UTC).timestamp() * 1000)
+    first_time = end_time - 2_000
+    second_time = end_time - 1_000
+    third_time = end_time
     rows = [
-        {"incomeType": "COMMISSION", "income": "1.0", "asset": "USDT", "time": 1_000, "symbol": "BTCUSDT"},
-        {"incomeType": "FUNDING_FEE", "income": "2.0", "asset": "USDT", "time": 2_000, "symbol": "BTCUSDT"},
-        {"incomeType": "COMMISSION", "income": "3.0", "asset": "USDT", "time": 3_000, "symbol": "ETHUSDT"},
+        {"incomeType": "COMMISSION", "income": "1.0", "asset": "USDT", "time": first_time, "symbol": "BTCUSDT"},
+        {"incomeType": "FUNDING_FEE", "income": "2.0", "asset": "USDT", "time": second_time, "symbol": "BTCUSDT"},
+        {"incomeType": "COMMISSION", "income": "3.0", "asset": "USDT", "time": third_time, "symbol": "ETHUSDT"},
     ]
     calls: list[tuple[int, int, int]] = []
 
@@ -453,11 +458,14 @@ async def test_refresh_distribution_history_paginates_when_window_hits_limit(tmp
             api_secret="s",
         ),
     )
-    end_time = 3_000
+    end_time = int(datetime.now(UTC).timestamp() * 1000)
+    first_time = end_time - 2_000
+    second_time = end_time - 1_000
+    third_time = end_time
     rows = [
-        {"asset": "RWUSD", "amount": "0.5", "divTime": 1_000, "enInfo": "RWUSD rewards distribution"},
-        {"asset": "RWUSD", "amount": "0.7", "divTime": 2_000, "enInfo": "RWUSD rewards distribution"},
-        {"asset": "RWUSD", "amount": "0.9", "divTime": 3_000, "enInfo": "RWUSD rewards distribution"},
+        {"asset": "RWUSD", "amount": "0.5", "divTime": first_time, "enInfo": "RWUSD rewards distribution"},
+        {"asset": "RWUSD", "amount": "0.7", "divTime": second_time, "enInfo": "RWUSD rewards distribution"},
+        {"asset": "RWUSD", "amount": "0.9", "divTime": third_time, "enInfo": "RWUSD rewards distribution"},
     ]
     calls: list[tuple[int, int, int]] = []
 
@@ -609,7 +617,6 @@ async def test_snapshot_marks_secondary_network_failures_as_fallback_sections(tm
     previous_snapshot = {
         "positions": [{"symbol": "BTCUSDT", "mark_price": Decimal("81000")}],
         "assets": [{"asset": "RWUSD", "wallet_balance": Decimal("2"), "cross_wallet_balance": Decimal("0")}],
-        "funding_assets": [{"asset": "RWUSD", "free": Decimal("1.5"), "locked": Decimal("0"), "freeze": Decimal("0"), "withdrawing": Decimal("0"), "total": Decimal("1.5")}],
         "distribution_summary": {
             "window_days": 7,
             "records": 1,
@@ -638,7 +645,6 @@ async def test_snapshot_marks_secondary_network_failures_as_fallback_sections(tm
     assert snapshot["section_errors"]["distribution_history"]["used_fallback"] is True
     assert snapshot["section_errors"]["spot_account"]["source"] == "network"
     assert snapshot["section_errors"]["spot_account"]["used_fallback"] is True
-    assert snapshot["section_errors"]["funding_assets"]["source"] == "network"
-    assert snapshot["section_errors"]["funding_assets"]["used_fallback"] is True
+    assert snapshot["spot_assets"] == [{"asset": "RWUSD", "free": Decimal("2"), "locked": Decimal("0"), "total": Decimal("2")}]
     assert snapshot["section_errors"]["mark_prices"]["source"] == "network"
     assert "mark_prices" in snapshot["diagnostics"]["fallback_sections"]

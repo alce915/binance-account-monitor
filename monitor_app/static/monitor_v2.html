@@ -16,7 +16,7 @@
       --warn: #b07a00;
       --bad: #b54636;
       --off: #667085;
-      --shadow: 0 18px 45px rgba(48, 31, 12, 0.12);
+      --shadow: 0 8px 22px rgba(48, 31, 12, 0.08);
     }
 
     * { box-sizing: border-box; }
@@ -42,7 +42,6 @@
       border-radius: 24px;
       background: var(--panel);
       box-shadow: var(--shadow);
-      backdrop-filter: blur(10px);
     }
 
     .hero {
@@ -168,6 +167,10 @@
       flex: 0 0 auto;
     }
 
+    #connectionBadge {
+      margin-top: 4px;
+    }
+
     .status-ok { color: var(--good); background: rgba(31, 122, 72, 0.12); }
     .status-partial { color: var(--warn); background: rgba(176, 122, 0, 0.12); }
     .status-error { color: var(--bad); background: rgba(181, 70, 54, 0.12); }
@@ -266,7 +269,12 @@
       gap: 18px;
     }
 
-    .group { overflow: hidden; }
+    .group {
+      overflow: hidden;
+      contain: layout paint style;
+      content-visibility: auto;
+      contain-intrinsic-size: 560px;
+    }
 
     .group-head {
       padding: 18px 22px;
@@ -329,26 +337,26 @@
       min-width: 148px;
       text-align: center;
       text-decoration: none;
-      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7), 0 10px 20px rgba(48, 31, 12, 0.06);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7), 0 3px 10px rgba(48, 31, 12, 0.05);
     }
 
     .account-switch-button:hover {
       border-color: rgba(182, 108, 47, 0.2);
       background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 238, 228, 0.96));
-      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72), 0 14px 26px rgba(48, 31, 12, 0.1);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72), 0 5px 14px rgba(48, 31, 12, 0.08);
     }
 
     .account-switch-button:focus-visible {
       outline: none;
       border-color: rgba(182, 108, 47, 0.45);
-      box-shadow: 0 0 0 3px rgba(182, 108, 47, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.72), 0 14px 26px rgba(48, 31, 12, 0.1);
+      box-shadow: 0 0 0 3px rgba(182, 108, 47, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.72), 0 5px 14px rgba(48, 31, 12, 0.08);
     }
 
     .account-switch-button.is-active {
       border-color: rgba(46, 126, 63, 0.28);
       background: linear-gradient(180deg, #75d24d 0%, #57b933 100%);
       color: #10200e;
-      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28), 0 14px 28px rgba(67, 139, 43, 0.22);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28), 0 6px 16px rgba(67, 139, 43, 0.16);
     }
 
     .account-single-view { display: block; }
@@ -419,20 +427,20 @@
       position: absolute;
       inset: 0;
       background: rgba(36, 27, 18, 0.36);
-      backdrop-filter: blur(6px);
+      background: rgba(28, 22, 14, 0.24);
     }
 
     .modal-panel {
       position: relative;
       width: min(1080px, calc(100vw - 32px));
-      max-height: min(840px, calc(100vh - 32px));
+      max-height: min(940px, calc(100vh - 20px));
       overflow: hidden;
       display: grid;
       grid-template-rows: auto 1fr auto;
       border: 1px solid var(--line);
       border-radius: 28px;
       background: rgba(255, 250, 244, 0.96);
-      box-shadow: 0 24px 60px rgba(36, 27, 18, 0.22);
+      box-shadow: 0 14px 34px rgba(36, 27, 18, 0.18);
     }
 
     .modal-head, .modal-foot {
@@ -446,12 +454,30 @@
 
     .modal-foot {
       border-bottom: 0;
-      border-top: 1px solid rgba(46, 32, 14, 0.08);
-      flex-wrap: wrap;
+      border-top: 0;
+      flex-direction: column;
+      align-items: stretch;
+      justify-content: center;
+      gap: 2px;
+      padding-top: 0;
+      padding-bottom: 16px;
     }
 
     .modal-head h2 { margin: 0; font-size: 24px; }
     .modal-subtitle { margin: 4px 0 0; color: var(--muted); font-size: 13px; line-height: 1.4; }
+    .modal-head-content {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      width: 100%;
+    }
+    .modal-head-title-row {
+      display: inline-flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
 
     .modal-close {
       border: 1px solid rgba(46, 32, 14, 0.08);
@@ -470,7 +496,7 @@
       overflow: auto;
       padding: 20px 24px 24px;
       display: grid;
-      gap: 16px;
+      gap: 8px;
     }
 
     .modal-controls {
@@ -519,42 +545,84 @@
     .segment-button.is-active {
       background: rgba(255, 255, 255, 0.96);
       color: var(--text);
-      box-shadow: 0 10px 24px rgba(36, 27, 18, 0.08);
+      box-shadow: 0 5px 14px rgba(36, 27, 18, 0.06);
     }
 
-    .modal-status, .modal-feedback {
-      min-height: 20px;
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.45;
+    .funding-select-all {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      white-space: nowrap;
     }
 
-    .modal-status.is-error, .modal-feedback.is-error { color: var(--bad); }
-    .modal-status.is-success, .modal-feedback.is-success { color: var(--good); }
+    .funding-select-all input {
+      width: 16px;
+      height: 16px;
+      margin: 0;
+      accent-color: var(--good);
+      cursor: pointer;
+    }
+
+    .funding-sync-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      white-space: nowrap;
+    }
+
+    .funding-sync-toggle input {
+      width: 16px;
+      height: 16px;
+      margin: 0;
+      accent-color: var(--good);
+      cursor: pointer;
+    }
 
     .funding-main-card {
-      padding: 16px 18px;
-      border: 1px solid rgba(46, 32, 14, 0.08);
-      border-radius: 22px;
-      background: rgba(255, 255, 255, 0.74);
-      display: grid;
-      gap: 10px;
+      margin: 6px 0 12px;
+      display: block;
     }
-
-    .funding-main-card-head {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 12px;
-      flex-wrap: wrap;
-    }
-
-    .funding-main-card h3 { margin: 0; font-size: 18px; }
 
     .funding-main-grid {
       display: grid;
       gap: 12px;
-      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .funding-stat {
+      min-height: 102px;
+      padding: 14px 16px;
+    }
+
+    .funding-stat.is-identity {
+      display: flex;
+      align-items: center;
+    }
+
+    .funding-identity-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      width: 100%;
+    }
+
+    .funding-identity-title {
+      font-size: 18px;
+      font-weight: 800;
+      line-height: 1.15;
+      letter-spacing: -0.02em;
+    }
+
+    .funding-identity-meta {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .funding-identity-badge {
+      flex: 0 0 auto;
+      margin-left: auto;
     }
 
     .funding-list-wrap {
@@ -564,19 +632,178 @@
       overflow: hidden;
     }
 
+    .funding-list-body {
+      height: min(620px, 70vh);
+      box-sizing: border-box;
+      overflow-y: auto;
+      overflow-x: hidden;
+      overscroll-behavior: contain;
+    }
+
     .funding-table { table-layout: auto; }
     .funding-table th, .funding-table td { vertical-align: middle; white-space: nowrap; }
+    .funding-table thead th {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      background: rgba(255, 252, 247, 0.98);
+      box-shadow: inset 0 -1px 0 rgba(46, 32, 14, 0.08);
+    }
     .funding-table td:last-child { white-space: normal; }
+    .funding-table tbody tr:last-child td { border-bottom: 0; }
+    .funding-table tbody tr.funding-table-spacer td {
+      height: 64px;
+      padding: 0;
+      border-bottom: 0;
+      background: transparent;
+    }
     .funding-table tbody tr.is-disabled { opacity: 0.58; }
     .funding-amount-input:disabled, .funding-table input[type="checkbox"]:disabled { cursor: not-allowed; opacity: 0.65; }
+    .funding-amount-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 220px;
+    }
+    .funding-max-button {
+      border: 1px solid rgba(46, 32, 14, 0.1);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.9);
+      color: var(--text);
+      padding: 8px 12px;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+      cursor: pointer;
+    }
+    .funding-max-button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
 
     .modal-actions {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      margin-top: -4px;
+    }
+
+    .modal-actions > [hidden] {
+      display: none !important;
+    }
+
+    .modal-actions-side {
+      grid-column: 1;
+      justify-self: start;
       display: inline-flex;
       align-items: center;
-      justify-content: flex-end;
       gap: 10px;
-      flex-wrap: wrap;
-      margin-left: auto;
+      flex-wrap: nowrap;
+    }
+
+    .modal-actions-submit {
+      grid-column: 2;
+      justify-self: center;
+    }
+
+    .funding-log-panel {
+      border: 1px solid rgba(46, 32, 14, 0.08);
+      border-radius: 22px;
+      background: rgba(255, 255, 255, 0.72);
+      overflow: hidden;
+      height: 198px;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .funding-log-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 14px;
+      border-bottom: 1px solid rgba(46, 32, 14, 0.08);
+    }
+
+    .funding-log-title {
+      font-size: 20px;
+      font-weight: 800;
+      line-height: 1.1;
+      letter-spacing: -0.02em;
+    }
+
+    .funding-log-latest {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .funding-log-list {
+      height: 142px;
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
+
+    .funding-log-entry {
+      display: grid;
+      grid-template-columns: 92px 88px minmax(0, 1fr);
+      align-items: center;
+      gap: 14px;
+      padding: 10px 14px;
+    }
+
+    .funding-log-entry + .funding-log-entry {
+      border-top: 1px dashed rgba(46, 32, 14, 0.08);
+    }
+
+    .funding-log-time {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .funding-log-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 76px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 800;
+      line-height: 1;
+    }
+
+    .funding-log-badge.is-info {
+      background: rgba(205, 123, 66, 0.16);
+      color: #a15622;
+    }
+
+    .funding-log-badge.is-success {
+      background: rgba(36, 156, 98, 0.16);
+      color: #0d7f50;
+    }
+
+    .funding-log-badge.is-error {
+      background: rgba(199, 73, 88, 0.16);
+      color: #b33c4a;
+    }
+
+    .funding-log-message {
+      min-width: 0;
+      font-size: 15px;
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+
+    .funding-log-empty {
+      padding: 18px 16px;
+      color: var(--muted);
+      font-size: 14px;
+      text-align: center;
     }
 
     .card-note { margin-top: 8px; color: var(--muted); font-size: 12px; line-height: 1.4; }
@@ -589,9 +816,19 @@
       .toolbar { padding: 12px 16px; }
       .account-switch-button { min-width: 0; flex: 1 1 calc(50% - 6px); padding: 14px 16px; font-size: 18px; }
       .modal-shell { padding: 12px; }
-      .modal-panel { width: min(100vw - 12px, 1080px); max-height: min(100vh - 12px, 920px); }
+      .modal-panel { width: min(100vw - 12px, 1080px); max-height: min(100vh - 8px, 980px); }
       .modal-head, .modal-body, .modal-foot { padding-left: 16px; padding-right: 16px; }
+      .funding-main-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .funding-list-body { overflow: auto; }
+      .funding-table { display: table; min-width: 920px; }
       .funding-table th, .funding-table td { white-space: normal; }
+      .modal-actions { grid-template-columns: 1fr auto 1fr; gap: 8px; }
+      .modal-actions-side { gap: 8px; }
+      .funding-log-entry {
+        grid-template-columns: 88px 80px;
+        align-items: start;
+      }
+      .funding-log-message { grid-column: 1 / -1; }
       table { display: block; overflow-x: auto; }
     }
   </style>
@@ -642,18 +879,16 @@
     <div class="modal-backdrop" data-close-funding-modal="true"></div>
     <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="fundingModalTitle">
       <div class="modal-head">
-        <div>
-          <h2 id="fundingModalTitle">资金归集与分发</h2>
-          <p class="modal-subtitle" id="fundingModalSubtitle">在主账号与子账号之间执行 Funding 资金划转</p>
+        <div class="modal-head-content">
+          <div class="modal-head-title-row">
+            <h2 id="fundingModalTitle">资金归集与分发</h2>
+            <button class="refresh-button" id="fundingRefreshButton" type="button">立即刷新</button>
+          </div>
+          <button class="modal-close" id="fundingModalClose" type="button" aria-label="关闭">×</button>
         </div>
-        <button class="modal-close" id="fundingModalClose" type="button" aria-label="关闭">×</button>
       </div>
       <div class="modal-body">
         <div class="modal-controls">
-          <label class="field">
-            <span>分组</span>
-            <select id="fundingGroupSelect"></select>
-          </label>
           <div class="field">
             <span>方向</span>
             <div class="segmented">
@@ -662,38 +897,63 @@
             </div>
           </div>
           <label class="field">
+            <span>分组</span>
+            <select id="fundingGroupSelect"></select>
+          </label>
+          <label class="field">
             <span>代币</span>
             <select id="fundingAssetSelect"></select>
           </label>
         </div>
-        <div class="modal-status" id="fundingCapabilityMessage"></div>
         <div class="funding-main-card" id="fundingMainSummary"></div>
         <div class="funding-list-wrap">
-          <table class="funding-table">
-            <thead>
-              <tr>
-                <th>选择</th>
-                <th>子账号</th>
-                <th>UID</th>
-                <th>Funding 可用</th>
-                <th>分发金额</th>
-                <th>可用状态</th>
-              </tr>
-            </thead>
-            <tbody id="fundingRows"></tbody>
-          </table>
+          <div class="funding-list-body">
+            <table class="funding-table">
+              <thead>
+                <tr>
+                  <th>
+                    <label class="funding-select-all">
+                      <span>选择</span>
+                      <input id="fundingSelectAllCheckbox" type="checkbox" aria-label="全选当前可操作子账号">
+                    </label>
+                  </th>
+                  <th>子账号</th>
+                  <th>UID</th>
+                  <th>现货可用</th>
+                  <th>
+                    <label class="funding-sync-toggle">
+                      <span>金额</span>
+                      <input id="fundingSyncAmountCheckbox" type="checkbox" aria-label="同步金额到已勾选子账号">
+                      <span>同步金额</span>
+                    </label>
+                  </th>
+                  <th>可用状态</th>
+                </tr>
+              </thead>
+              <tbody id="fundingRows"></tbody>
+            </table>
+          </div>
         </div>
       </div>
       <div class="modal-foot">
-        <div class="modal-feedback" id="fundingFeedback"></div>
         <div class="modal-actions">
-          <button class="refresh-button" id="fundingCancelButton" type="button">取消</button>
-          <button class="refresh-button" id="fundingSubmitButton" type="button">提交</button>
+          <div class="modal-actions-side" id="fundingQuickActions" hidden>
+            <button class="refresh-button" id="fundingQuickCollectButton" type="button">一键归集</button>
+            <button class="refresh-button" id="fundingQuickClearButton" type="button">一键清空</button>
+          </div>
+          <button class="refresh-button modal-actions-submit" id="fundingSubmitButton" type="button">提交</button>
+        </div>
+        <div class="funding-log-panel">
+          <div class="funding-log-head">
+            <div class="funding-log-title">执行日志</div>
+            <div class="funding-log-latest mono" id="fundingLogLatestTime">--:--:--</div>
+          </div>
+          <div class="funding-log-list" id="fundingLogList"></div>
         </div>
       </div>
     </section>
   </div>
 
-  <script src="/static/monitor_v2.js?v=20260328-1"></script>
+  <script src="/static/monitor_v2.js?v=20260329-4"></script>
 </body>
 </html>
