@@ -350,6 +350,112 @@ async def test_history_store_persists_minimized_payload_json(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
+async def test_history_store_defers_security_migration_until_async_usage(tmp_path: Path) -> None:
+    db_path = tmp_path / "history.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE history_events (
+                account_id TEXT NOT NULL,
+                source TEXT NOT NULL,
+                event_time_ms INTEGER NOT NULL,
+                unique_key TEXT NOT NULL,
+                asset TEXT NOT NULL,
+                amount TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                PRIMARY KEY (account_id, source, unique_key)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE fetch_state (
+                account_id TEXT NOT NULL,
+                source TEXT NOT NULL,
+                last_successful_end_time INTEGER NOT NULL,
+                PRIMARY KEY (account_id, source)
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE mark_prices (
+                symbol TEXT PRIMARY KEY,
+                mark_price TEXT NOT NULL,
+                updated_at_ms INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE distribution_backfill_state (
+                account_id TEXT PRIMARY KEY,
+                completed INTEGER NOT NULL DEFAULT 0,
+                updated_at_ms INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE history_source_status (
+                account_id TEXT NOT NULL,
+                source TEXT NOT NULL,
+                last_success_at_ms INTEGER,
+                last_successful_end_time INTEGER,
+                last_failed_at_ms INTEGER,
+                consecutive_failures INTEGER NOT NULL DEFAULT 0,
+                last_error_summary TEXT,
+                PRIMARY KEY (account_id, source)
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO history_events (account_id, source, event_time_ms, unique_key, asset, amount, event_type, payload_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "group_a.sub1",
+                "income",
+                1700000000000,
+                "income-1234567890",
+                "USDT",
+                "7.8",
+                "COMMISSION",
+                json.dumps(
+                    {
+                        "symbol": "ETHUSDT",
+                        "email": "foo@example.com",
+                        "token": "abc",
+                    }
+                ),
+            ),
+        )
+        conn.execute("PRAGMA user_version=0")
+        conn.commit()
+    finally:
+        conn.close()
+
+    store = MonitorHistoryStore(db_path)
+    try:
+        conn = sqlite3.connect(db_path)
+        try:
+            payload_row = conn.execute("SELECT payload_json FROM history_events").fetchone()
+            version = conn.execute("PRAGMA user_version").fetchone()[0]
+        finally:
+            conn.close()
+    finally:
+        await store.close()
+
+    payload = json.loads(payload_row[0])
+    assert version == 0
+    assert payload["email"] == "foo@example.com"
+    assert payload["token"] == "abc"
+
+
+@pytest.mark.asyncio
 async def test_history_store_migrates_existing_payloads_and_error_summaries(tmp_path: Path) -> None:
     db_path = tmp_path / "history.db"
     conn = sqlite3.connect(db_path)

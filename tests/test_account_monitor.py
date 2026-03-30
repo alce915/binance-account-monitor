@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import json
@@ -307,6 +307,51 @@ async def test_refresh_failure_preserves_previous_payload(tmp_path: Path) -> Non
     assert second["summary"]["success_count"] == 1
     assert "duration_ms" in second["refresh_result"]
     assert second["refresh_result"]["failed_accounts"][0]["account_id"] == "group_a.sub1"
+
+
+@pytest.mark.asyncio
+async def test_auto_refresh_failure_logs_and_broadcasts_warning(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    FailAfterFirstGateway.call_counts = {}
+    settings = Settings(
+        _env_file=None,
+        monitor_refresh_interval_ms=50,
+        monitor_history_window_days=3,
+        monitor_history_db_path=tmp_path / "history.db",
+    )
+    account = MonitorAccountConfig(
+        account_id="group_a.sub1",
+        child_account_id="sub1",
+        child_account_name="Sub One",
+        main_account_id="group_a",
+        main_account_name="Group A",
+        api_key="k1",
+        api_secret="s1",
+    )
+    settings.monitor_accounts = {account.account_id: account}
+    settings.monitor_main_accounts = {
+        "group_a": MainAccountConfig(main_id="group_a", name="Group A", children=(account,)),
+    }
+    controller = AccountMonitorController(settings, gateway_factory=lambda selected: FailAfterFirstGateway(selected))
+    await controller.refresh_now()
+
+    async def failing_refresh_once(*, refresh_id: str, reason: str) -> tuple[dict, bool]:
+        raise RuntimeError("temporary loop failure")
+
+    controller._refresh_once = failing_refresh_once  # type: ignore[method-assign]
+    caplog.set_level("ERROR", logger="uvicorn.error")
+    queue = await controller.subscribe()
+    try:
+        initial = await asyncio.wait_for(queue.get(), timeout=1)
+        warning = await asyncio.wait_for(queue.get(), timeout=1)
+    finally:
+        controller.unsubscribe(queue)
+        await controller.close()
+
+    assert initial["data"]["status"] == "ok"
+    assert warning["data"]["status"] == "error"
+    assert "temporary loop failure" in warning["data"]["message"]
+    assert warning["data"]["message"].startswith("自动刷新失败，已保留当前数据：")
+    assert any("Auto refresh failed refresh_id=" in record.getMessage() for record in caplog.records)
 
 
 class PartialFailureGateway(FakeMonitorGateway):

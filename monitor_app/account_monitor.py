@@ -249,13 +249,37 @@ class AccountMonitorController:
     async def _run_loop(self) -> None:
         interval_seconds = max(self._settings.monitor_refresh_interval_ms / 1000, 1.0)
         while True:
+            refresh_id = self._new_refresh_id()
             try:
-                await self._refresh_once(refresh_id=self._new_refresh_id(), reason="auto")
-                await asyncio.sleep(interval_seconds)
+                await self._refresh_once(refresh_id=refresh_id, reason="auto")
             except asyncio.CancelledError:
                 raise
-            except Exception:
-                await asyncio.sleep(interval_seconds)
+            except RefreshTimeoutError as exc:
+                logger.warning(
+                    "Auto refresh timed out refresh_id=%s duration_ms=%s",
+                    exc.refresh_id,
+                    exc.duration_ms,
+                )
+                await self._publish_refresh_warning("自动刷新超时，已保留当前数据")
+            except Exception as exc:
+                safe_message = sanitize_error_summary(exc, fallback="Auto refresh failed")
+                logger.exception(
+                    "Auto refresh failed refresh_id=%s message=%s",
+                    refresh_id,
+                    safe_message,
+                )
+                await self._publish_refresh_warning(f"自动刷新失败，已保留当前数据：{safe_message}")
+            await asyncio.sleep(interval_seconds)
+
+    async def _publish_refresh_warning(self, message: str) -> None:
+        async with self._refresh_lock:
+            self._last_payload = {
+                **self._last_payload,
+                "status": "error",
+                "message": message,
+            }
+            warning_payload = self._last_payload
+        await self._broadcast(warning_payload)
 
     async def _refresh_once(self, *, refresh_id: str, reason: str) -> tuple[dict[str, Any], bool]:
         async with self._refresh_lock:

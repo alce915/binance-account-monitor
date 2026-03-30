@@ -17,6 +17,9 @@ from monitor_app.history_store import HistoryEvent
 @pytest.mark.asyncio
 async def test_get_unified_account_snapshot_aggregates_distribution_and_assets(tmp_path: Path) -> None:
     settings = Settings(_env_file=None, monitor_history_db_path=tmp_path / "history.db")
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
+    income_event_ms = now_ms - 60_000
+    distribution_event_ms = now_ms - 30_000
     gateway = BinanceMonitorGateway(
         settings,
         MonitorAccountConfig(
@@ -83,14 +86,14 @@ async def test_get_unified_account_snapshot_aggregates_distribution_and_assets(t
                     "incomeType": "COMMISSION",
                     "income": "-1.25",
                     "asset": "USDT",
-                    "time": 1774404965000,
+                    "time": income_event_ms,
                     "symbol": "BTCUSDT",
                 },
                 {
                     "incomeType": "FUNDING_FEE",
                     "income": "0.3",
                     "asset": "USDT",
-                    "time": 1774404966000,
+                    "time": income_event_ms + 1_000,
                     "symbol": "BTCUSDT",
                 },
             ]
@@ -104,7 +107,7 @@ async def test_get_unified_account_snapshot_aggregates_distribution_and_assets(t
                     {
                         "asset": "RWUSD",
                         "amount": "3.5",
-                        "divTime": 1774404965000,
+                        "divTime": distribution_event_ms,
                         "enInfo": "RWUSD rewards distribution",
                     }
                 ],

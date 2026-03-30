@@ -14,6 +14,7 @@ from monitor_app.security import minimize_history_payload, sanitize_error_summar
 
 logger = logging.getLogger("uvicorn.error")
 HISTORY_STORE_SCHEMA_VERSION = 2
+SECURITY_MIGRATION_BATCH_SIZE = 200
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,6 +39,10 @@ class MonitorHistoryStore:
         self._income_summary_cache: dict[tuple[str, int], tuple[int, dict[str, Any]]] = {}
         self._distribution_summary_cache: dict[tuple[str, int], tuple[int, dict[str, Any]]] = {}
         self._distribution_periods_cache: dict[tuple[str, tuple[tuple[str, int | None], ...]], tuple[int, dict[str, Any]]] = {}
+        self._security_migration_pending = False
+        self._security_migration_from_version = HISTORY_STORE_SCHEMA_VERSION
+        self._history_migration_rowid = 0
+        self._status_migration_rowid = 0
         self._initialize()
 
     def _initialize(self) -> None:
@@ -108,54 +113,90 @@ class MonitorHistoryStore:
             )
             current_version = int(self._conn.execute("PRAGMA user_version").fetchone()[0])
             if current_version < HISTORY_STORE_SCHEMA_VERSION:
-                self._migrate_security_payloads(current_version)
-                self._conn.execute(f"PRAGMA user_version={HISTORY_STORE_SCHEMA_VERSION}")
+                self._security_migration_pending = True
+                self._security_migration_from_version = current_version
+                logger.info(
+                    "History store security migration scheduled from_version=%s",
+                    current_version,
+                )
 
-    def _migrate_security_payloads(self, from_version: int) -> None:
+    def _run_pending_security_migration_locked(self, batch_size: int = SECURITY_MIGRATION_BATCH_SIZE) -> None:
+        if not self._security_migration_pending:
+            return
         updated_history_rows = 0
         updated_status_rows = 0
-        history_rows = self._conn.execute(
-            """
-            SELECT rowid, source, event_time_ms, unique_key, asset, amount, event_type, payload_json
-            FROM history_events
-            """
-        ).fetchall()
-        for row in history_rows:
-            payload = self._load_payload_json(row["payload_json"])
-            minimized_payload = minimize_history_payload(
-                source=row["source"],
-                event_time_ms=int(row["event_time_ms"]),
-                unique_key=str(row["unique_key"]),
-                asset=str(row["asset"]),
-                amount=str(row["amount"]),
-                event_type=str(row["event_type"]),
-                payload=payload,
-            )
-            minimized_payload_json = json.dumps(minimized_payload, ensure_ascii=False, sort_keys=True)
-            if minimized_payload_json != row["payload_json"]:
-                self._conn.execute(
-                    "UPDATE history_events SET payload_json = ? WHERE rowid = ?",
-                    (minimized_payload_json, row["rowid"]),
+        scanned_history_rows = 0
+        scanned_status_rows = 0
+        remaining = max(int(batch_size), 1)
+        with self._conn:
+            history_rows = self._conn.execute(
+                """
+                SELECT rowid, source, event_time_ms, unique_key, asset, amount, event_type, payload_json
+                FROM history_events
+                WHERE rowid > ?
+                ORDER BY rowid ASC
+                LIMIT ?
+                """,
+                (self._history_migration_rowid, remaining),
+            ).fetchall()
+            scanned_history_rows = len(history_rows)
+            for row in history_rows:
+                payload = self._load_payload_json(row["payload_json"])
+                minimized_payload = minimize_history_payload(
+                    source=row["source"],
+                    event_time_ms=int(row["event_time_ms"]),
+                    unique_key=str(row["unique_key"]),
+                    asset=str(row["asset"]),
+                    amount=str(row["amount"]),
+                    event_type=str(row["event_type"]),
+                    payload=payload,
                 )
-                updated_history_rows += 1
+                minimized_payload_json = json.dumps(minimized_payload, ensure_ascii=False, sort_keys=True)
+                if minimized_payload_json != row["payload_json"]:
+                    self._conn.execute(
+                        "UPDATE history_events SET payload_json = ? WHERE rowid = ?",
+                        (minimized_payload_json, row["rowid"]),
+                    )
+                    updated_history_rows += 1
+            if history_rows:
+                self._history_migration_rowid = int(history_rows[-1]["rowid"])
+            remaining -= scanned_history_rows
 
-        status_rows = self._conn.execute(
-            "SELECT rowid, last_error_summary FROM history_source_status WHERE last_error_summary IS NOT NULL"
-        ).fetchall()
-        for row in status_rows:
-            sanitized_summary = sanitize_error_summary(row["last_error_summary"], fallback="History source failed")
-            if sanitized_summary != row["last_error_summary"]:
-                self._conn.execute(
-                    "UPDATE history_source_status SET last_error_summary = ? WHERE rowid = ?",
-                    (sanitized_summary, row["rowid"]),
-                )
-                updated_status_rows += 1
+            if scanned_history_rows < batch_size and remaining > 0:
+                status_rows = self._conn.execute(
+                    """
+                    SELECT rowid, last_error_summary
+                    FROM history_source_status
+                    WHERE rowid > ? AND last_error_summary IS NOT NULL
+                    ORDER BY rowid ASC
+                    LIMIT ?
+                    """,
+                    (self._status_migration_rowid, remaining),
+                ).fetchall()
+                scanned_status_rows = len(status_rows)
+                for row in status_rows:
+                    sanitized_summary = sanitize_error_summary(row["last_error_summary"], fallback="History source failed")
+                    if sanitized_summary != row["last_error_summary"]:
+                        self._conn.execute(
+                            "UPDATE history_source_status SET last_error_summary = ? WHERE rowid = ?",
+                            (sanitized_summary, row["rowid"]),
+                        )
+                        updated_status_rows += 1
+                if status_rows:
+                    self._status_migration_rowid = int(status_rows[-1]["rowid"])
 
+            migration_complete = scanned_history_rows < batch_size and scanned_status_rows < max(remaining, 0)
+            if migration_complete:
+                self._conn.execute(f"PRAGMA user_version={HISTORY_STORE_SCHEMA_VERSION}")
+                self._security_migration_pending = False
         logger.info(
-            "History store security migration applied from_version=%s updated_history_rows=%s updated_status_rows=%s",
-            from_version,
+            "History store security migration batch from_version=%s scanned_history_rows=%s updated_history_rows=%s scanned_status_rows=%s updated_status_rows=%s complete=%s",
+            self._security_migration_from_version,
+            scanned_history_rows,
             updated_history_rows,
+            scanned_status_rows,
             updated_status_rows,
+            migration_complete,
         )
 
     def _load_payload_json(self, payload_json: str) -> dict[str, Any]:
@@ -171,6 +212,7 @@ class MonitorHistoryStore:
 
     async def get_last_successful_end_time(self, account_id: str, source: str) -> int | None:
         async with self._lock:
+            self._run_pending_security_migration_locked()
             row = self._conn.execute(
                 """
                 SELECT last_successful_end_time
@@ -198,6 +240,7 @@ class MonitorHistoryStore:
         trimmed_count = 0
         async with self._lock:
             with self._conn:
+                self._run_pending_security_migration_locked()
                 if events:
                     before_changes = self._conn.total_changes
                     self._conn.executemany(
@@ -281,6 +324,7 @@ class MonitorHistoryStore:
         success_time = int(success_at_ms or datetime.now(UTC).timestamp() * 1000)
         async with self._lock:
             with self._conn:
+                self._run_pending_security_migration_locked()
                 self._conn.execute(
                     """
                     INSERT INTO history_source_status (
@@ -315,6 +359,7 @@ class MonitorHistoryStore:
         safe_error_summary = sanitize_error_summary(error_summary, fallback="History source failed")
         async with self._lock:
             with self._conn:
+                self._run_pending_security_migration_locked()
                 self._conn.execute(
                     """
                     INSERT INTO history_source_status (
@@ -337,6 +382,7 @@ class MonitorHistoryStore:
 
     async def get_source_status(self, account_id: str, source: str) -> dict[str, Any]:
         async with self._lock:
+            self._run_pending_security_migration_locked()
             row = self._conn.execute(
                 """
                 SELECT
@@ -461,6 +507,7 @@ class MonitorHistoryStore:
 
     async def is_distribution_backfill_complete(self, account_id: str) -> bool:
         async with self._lock:
+            self._run_pending_security_migration_locked()
             row = self._conn.execute(
                 """
                 SELECT completed
@@ -482,6 +529,7 @@ class MonitorHistoryStore:
     ) -> None:
         async with self._lock:
             with self._conn:
+                self._run_pending_security_migration_locked()
                 self._conn.execute(
                     """
                     INSERT INTO distribution_backfill_state (account_id, completed, updated_at_ms)
@@ -496,6 +544,7 @@ class MonitorHistoryStore:
 
     async def get_earliest_event_time_ms(self, account_id: str, source: str) -> int | None:
         async with self._lock:
+            self._run_pending_security_migration_locked()
             row = self._conn.execute(
                 """
                 SELECT MIN(event_time_ms) AS earliest_event_time_ms
@@ -529,6 +578,7 @@ class MonitorHistoryStore:
             return {}
         placeholders = ", ".join("?" for _ in normalized_symbols)
         async with self._lock:
+            self._run_pending_security_migration_locked()
             rows = self._conn.execute(
                 f"""
                 SELECT symbol, mark_price
@@ -547,6 +597,7 @@ class MonitorHistoryStore:
             return
         async with self._lock:
             with self._conn:
+                self._run_pending_security_migration_locked()
                 self._conn.executemany(
                     """
                     INSERT INTO mark_prices (symbol, mark_price, updated_at_ms)
@@ -567,6 +618,7 @@ class MonitorHistoryStore:
     ) -> list[sqlite3.Row]:
         window_start = self._window_start_ms(history_window_days)
         async with self._lock:
+            self._run_pending_security_migration_locked()
             rows = self._conn.execute(
                 """
                 SELECT asset, amount, event_type, event_time_ms
@@ -584,6 +636,7 @@ class MonitorHistoryStore:
         source: str,
     ) -> list[sqlite3.Row]:
         async with self._lock:
+            self._run_pending_security_migration_locked()
             rows = self._conn.execute(
                 """
                 SELECT asset, amount, event_type, event_time_ms
