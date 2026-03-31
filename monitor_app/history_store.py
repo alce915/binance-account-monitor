@@ -29,12 +29,13 @@ class HistoryEvent:
 
 
 class MonitorHistoryStore:
-    def __init__(self, db_path: Path) -> None:
+    def __init__(self, db_path: Path, *, max_rows_per_source: int | None = None) -> None:
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = asyncio.Lock()
         self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        self._max_rows_per_source = max_rows_per_source
         self._source_versions: dict[tuple[str, str], int] = {}
         self._income_summary_cache: dict[tuple[str, int], tuple[int, dict[str, Any]]] = {}
         self._distribution_summary_cache: dict[tuple[str, int], tuple[int, dict[str, Any]]] = {}
@@ -304,6 +305,23 @@ class MonitorHistoryStore:
                         (account_id, source, retain_after_ms),
                     )
                     trimmed_count = self._conn.total_changes - before_changes
+                    history_rows_changed = history_rows_changed or trimmed_count > 0
+                if self._max_rows_per_source is not None and self._max_rows_per_source > 0:
+                    before_changes = self._conn.total_changes
+                    self._conn.execute(
+                        """
+                        DELETE FROM history_events
+                        WHERE rowid IN (
+                            SELECT rowid
+                            FROM history_events
+                            WHERE account_id = ? AND source = ?
+                            ORDER BY event_time_ms DESC, rowid DESC
+                            LIMIT -1 OFFSET ?
+                        )
+                        """,
+                        (account_id, source, self._max_rows_per_source),
+                    )
+                    trimmed_count += self._conn.total_changes - before_changes
                     history_rows_changed = history_rows_changed or trimmed_count > 0
             if history_rows_changed:
                 self._bump_source_version(account_id, source)

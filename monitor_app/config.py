@@ -172,6 +172,10 @@ class Settings(BaseSettings):
     monitor_refresh_timeout_ms: int = 60_000
     monitor_history_window_days: int = 7
     monitor_account_concurrency: int = 5
+    monitor_history_max_rows: int = 300
+    monitor_runtime_log_path: Path = Path("monitor.runtime.log")
+    monitor_runtime_log_max_lines: int = 300
+    monitor_runtime_log_trim_interval_s: int = 60
     binance_recv_window_ms: int = 5_000
     binance_core_timeout_ms: int = 4_000
     binance_secondary_timeout_ms: int = 2_500

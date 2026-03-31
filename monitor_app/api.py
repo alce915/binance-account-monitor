@@ -20,6 +20,7 @@ from monitor_app.account_import import (
 )
 from monitor_app.config import settings
 from monitor_app.funding_transfer import FundingTransferError, FundingTransferService
+from monitor_app.log_maintenance import log_trim_loop
 from monitor_app.security import (
     is_loopback_client,
     is_trusted_loopback_host,
@@ -33,12 +34,27 @@ from monitor_app.security import (
 async def lifespan(app: FastAPI):
     monitor = AccountMonitorController(settings)
     funding_transfer = FundingTransferService(settings)
+    log_trim_stop = asyncio.Event()
+    log_trim_task = asyncio.create_task(
+        log_trim_loop(
+            [settings.monitor_runtime_log_path],
+            settings.monitor_runtime_log_max_lines,
+            settings.monitor_runtime_log_trim_interval_s,
+            log_trim_stop,
+        )
+    )
     app.state.monitor = monitor
     app.state.funding_transfer = funding_transfer
     app.state.allow_test_non_loopback = False
     try:
         yield
     finally:
+        log_trim_stop.set()
+        log_trim_task.cancel()
+        try:
+            await log_trim_task
+        except asyncio.CancelledError:
+            pass
         await funding_transfer.close()
         await monitor.close()
 

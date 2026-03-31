@@ -157,9 +157,18 @@ if (-not $started) {
     throw "Monitor service restart failed: $runtime"
 }
 
-$listener = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction Stop | Select-Object -First 1
 $statusLines = [System.Collections.Generic.List[string]]::new()
-$statusLines.Add("Monitor service restarted successfully on http://$hostAddress`:$port/ (PID=$($listener.OwningProcess))")
+try {
+    $listener = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction Stop | Select-Object -First 1
+    if ($listener) {
+        $statusLines.Add("Monitor service restarted successfully on http://$hostAddress`:$port/ (PID=$($listener.OwningProcess))")
+    } else {
+        $statusLines.Add("Monitor service restarted successfully on http://$hostAddress`:$port/")
+    }
+} catch {
+    $statusLines.Add("Monitor service restarted successfully on http://$hostAddress`:$port/")
+    $statusLines.Add("PID lookup skipped: $($_.Exception.Message)")
+}
 foreach ($message in $bootstrapMessages) {
     $statusLines.Add($message)
 }

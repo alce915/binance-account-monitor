@@ -102,7 +102,10 @@ class BinanceMonitorGateway:
         self._settings = settings
         self._account = account
         self._owns_history_store = history_store is None
-        self._history_store = history_store or MonitorHistoryStore(settings.monitor_history_db_path)
+        self._history_store = history_store or MonitorHistoryStore(
+            settings.monitor_history_db_path,
+            max_rows_per_source=settings.monitor_history_max_rows,
+        )
         self._distribution_backfill_task: asyncio.Task[None] | None = None
         self._income_refresh_task: asyncio.Task[dict[str, Any] | None] | None = None
         headers = {"X-MBX-APIKEY": self._account.api_key}

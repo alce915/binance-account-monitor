@@ -45,7 +45,10 @@ class AccountMonitorController:
         gateway_factory: Callable[[MonitorAccountConfig], UnifiedAccountGateway] | None = None,
     ) -> None:
         self._settings = settings
-        self._history_store = MonitorHistoryStore(settings.monitor_history_db_path)
+        self._history_store = MonitorHistoryStore(
+            settings.monitor_history_db_path,
+            max_rows_per_source=settings.monitor_history_max_rows,
+        )
         self._gateway_factory = gateway_factory or (
             lambda account: BinanceMonitorGateway(settings, account, history_store=self._history_store)
         )

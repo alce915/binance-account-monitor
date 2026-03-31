@@ -2,10 +2,10 @@
 setlocal
 
 cd /d "%~dp0"
-title 亢龙监控 - 停止服务
+title Monitor Service Stop
 
 echo ========================================
-echo  正在停止亢龙监控服务...
+echo   Stopping monitor service...
 echo ========================================
 echo.
 
@@ -17,18 +17,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$port = 8010;" ^
   "if ($envConfig.ContainsKey('MONITOR_API_PORT') -and $envConfig['MONITOR_API_PORT']) { try { $port = [int]$envConfig['MONITOR_API_PORT'] } catch {} };" ^
   "try { $connections = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction Stop } catch { $connections = @() };" ^
-  "if (-not $connections -or $connections.Count -eq 0) { Write-Output ('未发现端口 ' + $port + ' 上的监控服务进程。'); exit 0 };" ^
+  "if (-not $connections -or $connections.Count -eq 0) { Write-Output ('[monitor] No listening process found on port ' + $port + '.'); exit 0 };" ^
   "$stopped = 0;" ^
   "foreach ($connection in $connections) { try { Stop-Process -Id $connection.OwningProcess -Force -ErrorAction Stop; $stopped++; Start-Sleep -Milliseconds 300 } catch {} };" ^
-  "Write-Output ('已停止监控服务进程数: ' + $stopped)"
+  "Write-Output ('[monitor] Stopped process count: ' + $stopped)"
 
 set "EXIT_CODE=%ERRORLEVEL%"
 
 echo.
 if "%EXIT_CODE%"=="0" (
-    echo 停止命令执行完成。
+    echo [monitor] Stop command finished.
 ) else (
-    echo 停止服务失败，错误码: %EXIT_CODE%
+    echo [monitor] Stop failed. Exit code: %EXIT_CODE%
 )
 
 echo.
