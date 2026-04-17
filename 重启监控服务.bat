@@ -3,13 +3,15 @@ setlocal
 
 cd /d "%~dp0"
 title Monitor Service Restart
+set "POWERSHELL=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
+set "RESTART_SCRIPT=%~dp0scripts\restart_monitor_service.ps1"
 
 echo ========================================
 echo   Restarting monitor service...
 echo ========================================
 echo.
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\restart_monitor_service.ps1"
+"%POWERSHELL%" -NoProfile -ExecutionPolicy Bypass -File "%RESTART_SCRIPT%"
 set "EXIT_CODE=%ERRORLEVEL%"
 
 echo.

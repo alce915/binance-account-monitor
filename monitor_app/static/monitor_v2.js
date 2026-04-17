@@ -116,6 +116,13 @@ const fmtPercent = (value) => {
     ? `${(number * 100).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`
     : '-';
 };
+const fmtOptionalPrice = (value) => {
+  const number = Number(value ?? 0);
+  if (!Number.isFinite(number) || number <= 0) {
+    return '-';
+  }
+  return fmt(number);
+};
 const numberTone = (value) => {
   const number = Number(value);
   if (!Number.isFinite(number) || number === 0) {
@@ -966,13 +973,13 @@ function renderAccount(account) {
         `).join('')}
       </div>
       <div class="section"><h4>持仓</h4>${renderRows(
-        ['交易对', '方向', '数量', '开仓价', '标记价', '未实现盈亏', '名义价值', '杠杆'],
+        ['交易对', '方向', '数量', '开仓价', '标记价', '爆仓价', '未实现盈亏', '名义价值', '杠杆'],
         account.positions || [],
         (row) => `
           <tr>
             <td class="mono">${escapeHtml(row.symbol || '-')}</td>
             <td class="${positionSideTone(row.position_side)}">${escapeHtml(textPositionSide(row.position_side))}</td>
-            <td>${fmt(row.qty)}</td><td>${fmt(row.entry_price)}</td><td>${fmt(row.mark_price)}</td>
+            <td>${fmt(row.qty)}</td><td>${fmt(row.entry_price)}</td><td>${fmt(row.mark_price)}</td><td>${fmtOptionalPrice(row.liquidation_price)}</td>
             <td class="${numberTone(row.unrealized_pnl)}">${fmt(row.unrealized_pnl)}</td>
             <td>${fmt(row.notional)}</td><td>${fmtCount(row.leverage || 0)}x</td>
           </tr>
@@ -1597,6 +1604,7 @@ async function bootstrap() {
 
 window.__monitorV2 = {
   render,
+  renderAccount,
   scheduleStreamRender,
   appendFundingLog,
   renderFundingLogPanel,

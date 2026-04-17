@@ -176,6 +176,33 @@ describe('monitor_v2.js', () => {
     expect(app.document.getElementById('groupsContainer').textContent).toContain('暂无分组');
   });
 
+  it('renders liquidation price after mark price in positions', () => {
+    const app = createApp();
+    apps.push(app);
+    app.api.resetTestState();
+
+    const account = baseAccount();
+    account.positions = [
+      {
+        symbol: 'ETHUSDC',
+        position_side: 'LONG',
+        qty: '116.66',
+        entry_price: '2138.90',
+        mark_price: '2450.55',
+        liquidation_price: '1888.88',
+        unrealized_pnl: '36339.33',
+        notional: '285869.85',
+        leverage: 75,
+      },
+    ];
+
+    app.document.getElementById('groupsContainer').innerHTML = app.api.renderAccount(account);
+    const text = app.document.getElementById('groupsContainer').textContent;
+    expect(text).toContain('爆仓价');
+    expect(text).toContain('1,888.88');
+    expect(text).toContain('2,450.55');
+  });
+
   it('coalesces stream renders and only applies the latest payload', () => {
     const app = createApp();
     apps.push(app);

@@ -80,6 +80,8 @@ async def test_get_unified_account_snapshot_aggregates_distribution_and_assets(t
                     },
                 ],
             }
+        if path == "/papi/v1/um/positionRisk":
+            return []
         if path == "/papi/v1/um/income":
             return [
                 {
@@ -203,6 +205,182 @@ async def test_get_unified_account_snapshot_aggregates_distribution_and_assets(t
 
 
 @pytest.mark.asyncio
+async def test_get_unified_account_snapshot_overrides_liquidation_price_from_position_risk(tmp_path: Path) -> None:
+    settings = Settings(_env_file=None, monitor_history_db_path=tmp_path / "history.db")
+    gateway = BinanceMonitorGateway(
+        settings,
+        MonitorAccountConfig(
+            account_id="group_a.sub1",
+            child_account_id="sub1",
+            child_account_name="Sub One",
+            main_account_id="group_a",
+            main_account_name="Group A",
+            api_key="k",
+            api_secret="s",
+        ),
+    )
+
+    async def fake_signed_request(path: str, params: dict | None = None, *, timeout_s: float | None = None):
+        if path == "/papi/v1/account":
+            return {
+                "accountStatus": "NORMAL",
+                "accountEquity": "1500.5",
+                "accountInitialMargin": "210.2",
+                "totalAvailableBalance": "1001.1",
+            }
+        if path == "/papi/v1/um/account":
+            return {
+                "assets": [],
+                "positions": [
+                    {
+                        "symbol": "ETHUSDC",
+                        "positionSide": "LONG",
+                        "positionAmt": "116.663",
+                        "entryPrice": "2138.9",
+                        "markPrice": "2462.56",
+                        "unrealizedProfit": "37730.81",
+                        "notional": "287261.33",
+                        "leverage": "75",
+                        "liquidationPrice": "0",
+                    },
+                    {
+                        "symbol": "ETHUSDC",
+                        "positionSide": "SHORT",
+                        "positionAmt": "-116.663",
+                        "entryPrice": "2138.6",
+                        "markPrice": "2462.56",
+                        "unrealizedProfit": "-37764.89",
+                        "notional": "-287261.33",
+                        "leverage": "75",
+                        "liquidationPrice": "0",
+                    },
+                ],
+            }
+        if path == "/papi/v1/um/positionRisk":
+            return [
+                {
+                    "symbol": "ETHUSDC",
+                    "positionSide": "LONG",
+                    "positionAmt": "116.663",
+                    "liquidationPrice": "1888.88",
+                },
+                {
+                    "symbol": "ETHUSDC",
+                    "positionSide": "SHORT",
+                    "positionAmt": "-116.663",
+                    "liquidationPrice": "2888.88",
+                },
+            ]
+        if path == "/papi/v1/um/income":
+            return []
+        raise AssertionError(path)
+
+    async def fake_signed_request_sapi(path: str, params: dict | None = None, *, timeout_s: float | None = None):
+        if path == "/sapi/v1/asset/assetDividend":
+            return {"total": 0, "rows": []}
+        if path == "/api/v3/account":
+            return {"balances": []}
+        if path == "/sapi/v1/asset/get-funding-asset":
+            return []
+        raise AssertionError(path)
+
+    async def fake_public_request_market(path: str, params: dict | None = None, *, timeout_s: float | None = None):
+        assert path == "/fapi/v1/premiumIndex"
+        return []
+
+    gateway._signed_request = fake_signed_request  # type: ignore[method-assign]
+    gateway._signed_request_sapi = fake_signed_request_sapi  # type: ignore[method-assign]
+    gateway._signed_request_sapi_post = fake_signed_request_sapi  # type: ignore[method-assign]
+    gateway._public_request_market = fake_public_request_market  # type: ignore[method-assign]
+    try:
+        snapshot = await gateway.get_unified_account_snapshot(history_window_days=5)
+    finally:
+        await gateway.close()
+
+    assert [position["liquidation_price"] for position in snapshot["positions"]] == [
+        Decimal("1888.88"),
+        Decimal("2888.88"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_unified_account_snapshot_excludes_non_cash_dividends_from_profit_cards(tmp_path: Path) -> None:
+    settings = Settings(_env_file=None, monitor_history_db_path=tmp_path / "history.db")
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
+    distribution_event_ms = now_ms - 30_000
+    gateway = BinanceMonitorGateway(
+        settings,
+        MonitorAccountConfig(
+            account_id="group_a.sub1",
+            child_account_id="sub1",
+            child_account_name="Sub One",
+            main_account_id="group_a",
+            main_account_name="Group A",
+            api_key="k",
+            api_secret="s",
+        ),
+    )
+
+    async def fake_signed_request(path: str, params: dict | None = None, *, timeout_s: float | None = None):
+        if path == "/papi/v1/account":
+            return {
+                "accountStatus": "NORMAL",
+                "accountEquity": "1000",
+                "accountInitialMargin": "0",
+                "totalAvailableBalance": "1000",
+            }
+        if path == "/papi/v1/um/account":
+            return {"assets": [], "positions": []}
+        if path == "/papi/v1/um/positionRisk":
+            return []
+        if path == "/papi/v1/um/income":
+            return []
+        raise AssertionError(path)
+
+    async def fake_signed_request_sapi(path: str, params: dict | None = None, *, timeout_s: float | None = None):
+        if path == "/sapi/v1/asset/assetDividend":
+            return {
+                "total": 2,
+                "rows": [
+                    {
+                        "asset": "RWUSD",
+                        "amount": "3.5",
+                        "divTime": distribution_event_ms,
+                        "enInfo": "RWUSD rewards distribution",
+                    },
+                    {
+                        "asset": "CATI",
+                        "amount": "10",
+                        "divTime": distribution_event_ms,
+                        "enInfo": "RWUSD Boost Rewards distribute",
+                    },
+                ],
+            }
+        if path == "/api/v3/account":
+            return {"balances": []}
+        raise AssertionError(path)
+
+    async def fake_public_request_market(path: str, params: dict | None = None, *, timeout_s: float | None = None):
+        assert path == "/fapi/v1/premiumIndex"
+        return []
+
+    gateway._signed_request = fake_signed_request  # type: ignore[method-assign]
+    gateway._signed_request_sapi = fake_signed_request_sapi  # type: ignore[method-assign]
+    gateway._signed_request_sapi_post = fake_signed_request_sapi  # type: ignore[method-assign]
+    gateway._public_request_market = fake_public_request_market  # type: ignore[method-assign]
+    try:
+        snapshot = await gateway.get_unified_account_snapshot(history_window_days=7)
+    finally:
+        await gateway.close()
+
+    assert snapshot["distribution_summary"]["records"] == 1
+    assert snapshot["distribution_summary"]["total_distribution"] == Decimal("3.5")
+    assert snapshot["distribution_summary"]["by_asset"] == {"RWUSD": Decimal("3.5")}
+    assert snapshot["totals"]["total_distribution"] == Decimal("3.5")
+    assert snapshot["distribution_profit_summary"]["today"]["amount"] == Decimal("3.5")
+
+
+@pytest.mark.asyncio
 async def test_get_unified_account_snapshot_uses_core_and_secondary_retry_budgets(tmp_path: Path) -> None:
     settings = Settings(
         _env_file=None,
@@ -259,6 +437,8 @@ async def test_get_unified_account_snapshot_uses_core_and_secondary_retry_budget
                     }
                 ],
             }
+        if path == "/papi/v1/um/positionRisk":
+            return []
         raise AssertionError(path)
 
     async def fake_signed_request_sapi(path: str, params: dict | None = None, *, timeout_s: float | None = None):
@@ -351,6 +531,8 @@ async def test_get_unified_account_snapshot_uses_cached_commission_when_income_r
             }
         if path == "/papi/v1/um/account":
             return {"assets": [], "positions": []}
+        if path == "/papi/v1/um/positionRisk":
+            return []
         if path == "/papi/v1/um/income":
             await asyncio.sleep(0.3)
             return [
@@ -603,6 +785,8 @@ async def test_snapshot_marks_secondary_network_failures_as_fallback_sections(tm
                     }
                 ],
             }
+        if path == "/papi/v1/um/positionRisk":
+            return []
         if path == "/papi/v1/um/income":
             return []
         raise AssertionError(path)

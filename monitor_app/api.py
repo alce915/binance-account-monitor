@@ -109,7 +109,10 @@ class FundingCollectRequest(BaseModel):
 
 @app.get("/", include_in_schema=False)
 async def index() -> FileResponse:
-    return FileResponse(Path(__file__).with_name("static").joinpath("monitor_v2.html"))
+    return FileResponse(
+        Path(__file__).with_name("static").joinpath("monitor_v2.html"),
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
 
 
 @app.get("/healthz")

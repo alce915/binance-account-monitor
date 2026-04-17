@@ -460,9 +460,16 @@ class MonitorHistoryStore:
         self._income_summary_cache[cache_key] = (version, self._clone_summary(summary))
         return summary
 
-    async def summarize_distribution(self, account_id: str, history_window_days: int) -> dict[str, Any]:
+    async def summarize_distribution(
+        self,
+        account_id: str,
+        history_window_days: int,
+        *,
+        counted_assets: set[str] | None = None,
+    ) -> dict[str, Any]:
         version = self._source_version(account_id, "distribution")
-        cache_key = (account_id, history_window_days)
+        normalized_assets = tuple(sorted({str(asset).upper() for asset in (counted_assets or set()) if str(asset).strip()}))
+        cache_key = (account_id, history_window_days, normalized_assets)
         cached = self._distribution_summary_cache.get(cache_key)
         if cached and cached[0] == version:
             return self._clone_summary(cached[1])
@@ -471,18 +478,22 @@ class MonitorHistoryStore:
         by_type: dict[str, Decimal] = {}
         by_asset: dict[str, Decimal] = {}
         total_distribution = Decimal("0")
+        record_count = 0
 
         for row in rows:
+            asset = str(row["asset"])
+            if normalized_assets and asset.upper() not in normalized_assets:
+                continue
             amount = Decimal(str(row["amount"]))
             event_type = str(row["event_type"])
-            asset = str(row["asset"])
             total_distribution += amount
+            record_count += 1
             by_type[event_type] = by_type.get(event_type, Decimal("0")) + amount
             by_asset[asset] = by_asset.get(asset, Decimal("0")) + amount
 
         summary = {
             "window_days": history_window_days,
-            "records": len(rows),
+            "records": record_count,
             "total_distribution": total_distribution,
             "by_type": dict(sorted(by_type.items())),
             "by_asset": dict(sorted(by_asset.items())),
@@ -494,23 +505,32 @@ class MonitorHistoryStore:
         self,
         account_id: str,
         period_starts_ms: dict[str, int | None],
+        *,
+        counted_assets: set[str] | None = None,
     ) -> dict[str, Any]:
         version = self._source_version(account_id, "distribution")
+        normalized_assets = tuple(sorted({str(asset).upper() for asset in (counted_assets or set()) if str(asset).strip()}))
         cache_key = (
             account_id,
             tuple(sorted(period_starts_ms.items(), key=lambda item: item[0])),
+            normalized_assets,
         )
         cached = self._distribution_periods_cache.get(cache_key)
         if cached and cached[0] == version:
             return self._clone_summary(cached[1])
 
         rows = await self._read_all_history_rows(account_id, "distribution")
-        earliest_event_time_ms = int(rows[0]["event_time_ms"]) if rows else None
+        earliest_event_time_ms = None
         amounts: dict[str, Decimal] = {key: Decimal("0") for key in period_starts_ms}
 
         for row in rows:
+            asset = str(row["asset"])
+            if normalized_assets and asset.upper() not in normalized_assets:
+                continue
             amount = Decimal(str(row["amount"]))
             event_time_ms = int(row["event_time_ms"])
+            if earliest_event_time_ms is None:
+                earliest_event_time_ms = event_time_ms
             for key, start_ms in period_starts_ms.items():
                 if start_ms is None or event_time_ms >= start_ms:
                     amounts[key] += amount

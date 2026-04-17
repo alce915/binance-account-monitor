@@ -933,6 +933,14 @@
         : '-';
     }
 
+    function fmtOptionalPrice(value) {
+      const number = Number(value || 0);
+      if (!Number.isFinite(number) || number <= 0) {
+        return '-';
+      }
+      return fmt(number);
+    }
+
     function numberTone(value) {
       const number = Number(value);
       if (!Number.isFinite(number) || number === 0) {

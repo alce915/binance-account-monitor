@@ -14,6 +14,8 @@ config/binance_monitor_accounts.json
 data/*.db
 data/*.db-shm
 data/*.db-wal
+data/runtime/
+monitor.runtime.log.tmp
 
 .DS_Store
 Thumbs.db
@@ -44,6 +46,7 @@ projects.json
 git-remote.json
 repo-name-overrides.json
 # <<< codex git-sync <<<
+
 
 
 

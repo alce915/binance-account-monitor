@@ -86,6 +86,8 @@ HISTORY_SOURCE_INCOME = "income"
 HISTORY_SOURCE_DISTRIBUTION = "distribution"
 HISTORY_SOURCE_MARGIN_INTEREST = "margin_interest"
 HISTORY_SOURCE_NEGATIVE_INTEREST = "negative_interest"
+# Only assets with directly comparable cash-like units should feed收益/APY cards.
+DISPLAY_DISTRIBUTION_ASSETS = frozenset({"RWUSD", "USDT", "USDC", "FDUSD", "TUSD", "USDP", "BUSD", "DAI", "USDS", "PYUSD"})
 CORE_RETRY_DELAYS_SECONDS = (0.2, 0.4, 0.8, 1.6)
 SECONDARY_RETRY_DELAYS_SECONDS = (0.2, 0.5)
 BEIJING_TZ = timezone(timedelta(hours=8))
@@ -293,6 +295,13 @@ class BinanceMonitorGateway:
                 refresh_id=refresh_id,
             )
         )
+        position_risk_task = asyncio.create_task(
+            self._optional_request_with_retry(
+                "/papi/v1/um/positionRisk",
+                {},
+                label="unified um position risk",
+            )
+        )
         spot_task = asyncio.create_task(
             self._optional_request_sapi_with_retry(
                 "/api/v3/account",
@@ -303,9 +312,11 @@ class BinanceMonitorGateway:
         secondary_started_at = perf_counter()
         (
             (distribution_summary, distribution_error),
+            (position_risk_payload, position_risk_error),
             (spot_account_payload, spot_error),
         ) = await asyncio.gather(
             distribution_task,
+            position_risk_task,
             spot_task,
         )
         income_summary, income_error = await self._resolve_income_summary(
@@ -325,6 +336,11 @@ class BinanceMonitorGateway:
             previous_snapshot=previous_snapshot,
         )
         timings["profit_summary_ms"] = int((perf_counter() - distribution_profit_started_at) * 1000)
+        liquidation_price_result = self._enrich_positions_with_liquidation_prices(
+            positions,
+            position_risk_payload=position_risk_payload,
+            previous_snapshot=previous_snapshot,
+        )
         previous_spot_balances = self._extract_previous_spot_balances(previous_snapshot)
         if spot_account_payload is not None:
             spot_balances = self._parse_spot_balances(spot_account_payload)
@@ -358,6 +374,12 @@ class BinanceMonitorGateway:
                 spot_error,
                 used_fallback=bool(previous_spot_balances),
                 stale=bool(previous_spot_balances),
+            )
+        if position_risk_error is not None:
+            section_errors["position_risk"] = self._build_section_error(
+                position_risk_error,
+                used_fallback=bool(liquidation_price_result["used_fallback"]),
+                stale=bool(liquidation_price_result["used_fallback"]),
             )
         if mark_price_result["error"] is not None:
             section_errors["mark_prices"] = self._build_section_error(
@@ -446,6 +468,7 @@ class BinanceMonitorGateway:
             distribution_summary = await self._history_store.summarize_distribution(
                 self._account.account_id,
                 DISTRIBUTION_WINDOW_DAYS,
+                counted_assets=set(DISPLAY_DISTRIBUTION_ASSETS),
             )
         except Exception as exc:
             logger.warning(
@@ -534,6 +557,7 @@ class BinanceMonitorGateway:
                 self._history_store.summarize_distribution_periods(
                     self._account.account_id,
                     period_starts,
+                    counted_assets=set(DISPLAY_DISTRIBUTION_ASSETS),
                 ),
                 self._history_store.is_distribution_backfill_complete(self._account.account_id),
             )
@@ -1385,6 +1409,13 @@ class BinanceMonitorGateway:
             SECONDARY_RETRY_DELAYS_SECONDS,
         )
 
+    def _resolve_position_side(self, item: dict[str, Any]) -> str:
+        position_amt = Decimal(item.get("positionAmt") or "0")
+        return str(item.get("positionSide") or ("LONG" if position_amt > 0 else "SHORT"))
+
+    def _position_key(self, symbol: str, position_side: str) -> tuple[str, str]:
+        return (symbol, position_side)
+
     def _parse_positions(self, payload: list[dict[str, Any]]) -> list[dict[str, Any]]:
         positions: list[dict[str, Any]] = []
         for item in payload:
@@ -1392,7 +1423,7 @@ class BinanceMonitorGateway:
             pnl = Decimal(item.get("unrealizedProfit") or item.get("unRealizedProfit") or "0")
             if position_amt == Decimal("0") and pnl == Decimal("0"):
                 continue
-            position_side = item.get("positionSide") or ("LONG" if position_amt > 0 else "SHORT")
+            position_side = self._resolve_position_side(item)
             positions.append(
                 {
                     "symbol": item.get("symbol", ""),
@@ -1408,6 +1439,67 @@ class BinanceMonitorGateway:
             )
         positions.sort(key=lambda entry: (entry["symbol"], entry["position_side"]))
         return positions
+
+    def _extract_previous_liquidation_prices(
+        self,
+        previous_snapshot: dict[str, Any] | None,
+    ) -> dict[tuple[str, str], Decimal]:
+        if not isinstance(previous_snapshot, dict):
+            return {}
+        prices: dict[tuple[str, str], Decimal] = {}
+        for item in previous_snapshot.get("positions", []) or []:
+            if not isinstance(item, dict):
+                continue
+            symbol = str(item.get("symbol") or "")
+            position_side = str(item.get("position_side") or "")
+            if not symbol or not position_side:
+                continue
+            price = Decimal(str(item.get("liquidation_price") or "0"))
+            if price > Decimal("0"):
+                prices[self._position_key(symbol, position_side)] = price
+        return prices
+
+    def _enrich_positions_with_liquidation_prices(
+        self,
+        positions: list[dict[str, Any]],
+        *,
+        position_risk_payload: Any,
+        previous_snapshot: dict[str, Any] | None,
+    ) -> dict[str, bool]:
+        risk_prices: dict[tuple[str, str], Decimal] = {}
+        rows = position_risk_payload if isinstance(position_risk_payload, list) else []
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            symbol = str(item.get("symbol") or "")
+            if not symbol:
+                continue
+            liquidation_price = Decimal(str(item.get("liquidationPrice") or "0"))
+            if liquidation_price <= Decimal("0"):
+                continue
+            position_side = self._resolve_position_side(item)
+            risk_prices[self._position_key(symbol, position_side)] = liquidation_price
+
+        previous_prices = self._extract_previous_liquidation_prices(previous_snapshot)
+        used_fallback = False
+        for position in positions:
+            symbol = str(position.get("symbol") or "")
+            position_side = str(position.get("position_side") or "")
+            if not symbol or not position_side:
+                continue
+            key = self._position_key(symbol, position_side)
+            liquidation_price = risk_prices.get(key)
+            if liquidation_price is not None:
+                position["liquidation_price"] = liquidation_price
+                continue
+            current_price = Decimal(str(position.get("liquidation_price") or "0"))
+            if current_price > Decimal("0"):
+                continue
+            previous_price = previous_prices.get(key)
+            if previous_price is not None and previous_price > Decimal("0"):
+                position["liquidation_price"] = previous_price
+                used_fallback = True
+        return {"used_fallback": used_fallback}
 
     async def _enrich_positions_with_mark_prices(
         self,

@@ -331,6 +331,22 @@ class AccountMonitorController:
                     payload.get("refresh_meta", {}).get("timings", {}).get("slowest_account_ms", 0),
                 )
                 return payload, True
+            if self._should_publish_failure_payload(payload):
+                broadcast_started_at = perf_counter()
+                self._last_payload = payload
+                await self._broadcast(payload)
+                broadcast_ms = int((perf_counter() - broadcast_started_at) * 1000)
+                duration_ms = int((perf_counter() - started_at) * 1000)
+                payload["refresh_meta"]["timings"]["broadcast_ms"] = broadcast_ms
+                payload["refresh_meta"]["timings"]["total_ms"] = duration_ms
+                logger.warning(
+                    "Refresh published failure payload refresh_id=%s reason=%s duration_ms=%s failed_accounts=%s",
+                    refresh_id,
+                    reason,
+                    duration_ms,
+                    payload.get("refresh_meta", {}).get("failed_accounts", []),
+                )
+                return payload, False
             duration_ms = int((perf_counter() - started_at) * 1000)
             payload["refresh_meta"]["timings"]["broadcast_ms"] = 0
             payload["refresh_meta"]["timings"]["total_ms"] = duration_ms
@@ -551,6 +567,13 @@ class AccountMonitorController:
         if account_count == 0:
             return True
         return success_count > 0
+
+    def _should_publish_failure_payload(self, payload: dict[str, Any]) -> bool:
+        current_summary = self._last_payload.get("summary") or {}
+        if int(current_summary.get("account_count") or 0) > 0:
+            return False
+        next_summary = payload.get("summary") or {}
+        return int(next_summary.get("account_count") or 0) > 0
 
     def _decorate_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         service = dict(payload.get("service") or {})
