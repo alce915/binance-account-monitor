@@ -16,6 +16,7 @@ function baseAccount(accountId = 'group_a.sub1', childName = 'Sub 1') {
     account_name: childName,
     child_account_name: childName,
     account_status: 'NORMAL',
+    uni_mmr: '1.63',
     totals: {
       equity: '100',
       margin: '50',
@@ -215,6 +216,33 @@ describe('monitor_v2.js', () => {
     expect(text).toContain('爆仓价');
     expect(text).toContain('1,888.88');
     expect(text).toContain('2,450.55');
+  });
+
+  it('renders UniMMR in the account header with the configured severity colors', () => {
+    const app = createApp();
+    apps.push(app);
+    app.api.resetTestState();
+
+    const highAccount = baseAccount('group_a.sub1', 'High');
+    highAccount.uni_mmr = '1.63';
+    app.document.getElementById('groupsContainer').innerHTML = app.api.renderAccount(highAccount);
+    let badge = app.document.querySelector('.account-head .uni-mmr-indicator');
+    expect(badge).not.toBeNull();
+    expect(badge.textContent).toContain('UniMMR');
+    expect(badge.textContent).toContain('1.63');
+    expect(badge.className).toContain('uni-mmr-good');
+
+    const warnAccount = baseAccount('group_a.sub2', 'Warn');
+    warnAccount.uni_mmr = '1.35';
+    app.document.getElementById('groupsContainer').innerHTML = app.api.renderAccount(warnAccount);
+    badge = app.document.querySelector('.account-head .uni-mmr-indicator');
+    expect(badge.className).toContain('uni-mmr-warn');
+
+    const badAccount = baseAccount('group_a.sub3', 'Bad');
+    badAccount.uni_mmr = '1.20';
+    app.document.getElementById('groupsContainer').innerHTML = app.api.renderAccount(badAccount);
+    badge = app.document.querySelector('.account-head .uni-mmr-indicator');
+    expect(badge.className).toContain('uni-mmr-bad');
   });
 
   it('renders cumulative distribution amounts in cards instead of 7-day rolling totals', () => {

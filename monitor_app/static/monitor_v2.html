@@ -377,6 +377,45 @@
 
     .account-head h3 { margin: 0; }
 
+    .account-head-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .uni-mmr-indicator {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 36px;
+      padding: 7px 14px;
+      border: 1px solid rgba(46, 32, 14, 0.08);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.78);
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1;
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .uni-mmr-good {
+      color: var(--good);
+      background: rgba(31, 122, 72, 0.12);
+    }
+
+    .uni-mmr-warn {
+      color: var(--warn);
+      background: rgba(176, 122, 0, 0.14);
+    }
+
+    .uni-mmr-bad {
+      color: var(--bad);
+      background: rgba(181, 70, 54, 0.12);
+    }
+
     .account-grid {
       padding: 16px 18px;
       display: grid;

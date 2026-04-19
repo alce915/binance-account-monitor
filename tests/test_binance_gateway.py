@@ -40,6 +40,7 @@ async def test_get_unified_account_snapshot_aggregates_distribution_and_assets(t
                 "accountEquity": "1500.5",
                 "accountInitialMargin": "210.2",
                 "totalAvailableBalance": "1001.1",
+                "uniMMR": "1.63",
             }
         if path == "/papi/v1/um/account":
             return {
@@ -149,6 +150,7 @@ async def test_get_unified_account_snapshot_aggregates_distribution_and_assets(t
     assert snapshot["status"] == "ok"
     assert snapshot["account_id"] == "group_a.sub1"
     assert snapshot["totals"]["equity"] == Decimal("1500.5")
+    assert snapshot["uni_mmr"] == Decimal("1.63")
     assert snapshot["totals"]["unrealized_pnl"] == Decimal("12.5")
     assert snapshot["totals"]["total_income"] == Decimal("-0.95")
     assert snapshot["totals"]["total_commission"] == Decimal("-1.25")

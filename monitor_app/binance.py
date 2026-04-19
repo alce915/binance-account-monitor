@@ -419,6 +419,7 @@ class BinanceMonitorGateway:
             "child_account_name": self._account.child_account_name,
             "account_name": self._account.display_name,
             "account_status": account_payload.get("accountStatus", ""),
+            "uni_mmr": self._parse_optional_decimal(account_payload.get("uniMMR")),
             "updated_at": now,
             "totals": {
                 "equity": equity,
@@ -1786,6 +1787,15 @@ class BinanceMonitorGateway:
             except Exception:
                 return value
         return value
+
+    def _parse_optional_decimal(self, value: Any) -> Decimal | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            return Decimal(text)
+        except Exception:
+            return None
 
     def _parse_spot_balances(self, payload: Any) -> dict[str, dict[str, Decimal]]:
         if not isinstance(payload, dict):

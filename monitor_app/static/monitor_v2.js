@@ -134,6 +134,12 @@ const fmtOptionalPrice = (value) => {
   }
   return fmt(number);
 };
+const fmtUniMmr = (value) => {
+  const number = Number(value);
+  return Number.isFinite(number)
+    ? number.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    : '-';
+};
 const numberTone = (value) => {
   const number = Number(value);
   if (!Number.isFinite(number) || number === 0) {
@@ -172,6 +178,15 @@ const positionSideTone = (side) => {
   if (side === 'LONG') return 'side-long';
   if (side === 'SHORT') return 'side-short';
   return '';
+};
+const uniMmrToneClass = (value) => {
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    return '';
+  }
+  if (number > 1.5) return 'uni-mmr-good';
+  if (number > 1.2) return 'uni-mmr-warn';
+  return 'uni-mmr-bad';
 };
 const currentGroups = () => (Array.isArray(latestPayload?.groups) ? latestPayload.groups : []);
 const refreshButtonLabel = () => (refreshCooldownSeconds > 0 ? `${refreshCooldownSeconds}秒` : '立即刷新');
@@ -1424,6 +1439,12 @@ function distributionDisplayAmount(summary = {}, profitSummary = null, accounts 
   return summary?.total_distribution ?? 0;
 }
 
+function renderUniMmrIndicator(account) {
+  const value = account?.uni_mmr;
+  const toneClass = uniMmrToneClass(value);
+  return `<div class="uni-mmr-indicator${toneClass ? ` ${toneClass}` : ''}">UniMMR ${escapeHtml(fmtUniMmr(value))}</div>`;
+}
+
 function renderAccount(account) {
   const totals = account.totals || {};
   const distributionAmount = distributionDisplayAmount(totals, account.distribution_profit_summary);
@@ -1434,7 +1455,10 @@ function renderAccount(account) {
           <h3>${escapeHtml(account.child_account_name || account.account_name || account.account_id || '-')}</h3>
           <div class="mono">${escapeHtml(account.account_id || '-')} | ${escapeHtml(textAccountStatus(account.account_status))}</div>
         </div>
-        <div class="badge ${statusClass(account.status)}">${escapeHtml(textStatus(account.status))}</div>
+        <div class="account-head-actions">
+          ${renderUniMmrIndicator(account)}
+          <div class="badge ${statusClass(account.status)}">${escapeHtml(textStatus(account.status))}</div>
+        </div>
       </div>
       <div class="account-grid">
         ${[
