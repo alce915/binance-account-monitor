@@ -1,5 +1,6 @@
 ﻿.env
 .venv/
+.worktrees/
 .pytest_cache/
 __pycache__/
 *.py[cod]
@@ -46,6 +47,7 @@ projects.json
 git-remote.json
 repo-name-overrides.json
 # <<< codex git-sync <<<
+
 
 
 

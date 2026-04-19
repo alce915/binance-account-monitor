@@ -19,6 +19,37 @@ if (-not (Ensure-MonitorAdmin -ScriptPath $PSCommandPath)) {
     return
 }
 
+function Normalize-MonitorProcessEnvironment {
+    $processVariables = [System.Environment]::GetEnvironmentVariables('Process')
+    $pathValue = $null
+
+    foreach ($candidate in @('Path', 'PATH')) {
+        if ($processVariables.ContainsKey($candidate) -and $processVariables[$candidate]) {
+            $pathValue = [string]$processVariables[$candidate]
+            break
+        }
+    }
+
+    if ($pathValue) {
+        [System.Environment]::SetEnvironmentVariable('Path', $pathValue, 'Process')
+    }
+
+    [System.Environment]::SetEnvironmentVariable('PATH', $null, 'Process')
+}
+
+function Export-MonitorEnvConfigToProcess {
+    param([hashtable]$EnvConfig)
+
+    foreach ($entry in $EnvConfig.GetEnumerator()) {
+        $name = [string]$entry.Key
+        $value = [string]$entry.Value
+        if (-not $name) {
+            continue
+        }
+        [System.Environment]::SetEnvironmentVariable($name, $value, 'Process')
+    }
+}
+
 function Test-PlaceholderCredentials {
     param([string]$Path)
 
@@ -124,6 +155,8 @@ $sitePackages = if (Test-Path (Join-Path $projectRoot '.venv\Lib\site-packages')
 }
 
 Set-Location $projectRoot
+Normalize-MonitorProcessEnvironment
+Export-MonitorEnvConfigToProcess -EnvConfig $envConfig
 $env:PYTHONPATH = "$projectRoot;$sitePackages"
 
 $cleanupResult = Stop-MonitorServiceInstance -ProjectRoot $projectRoot -HostAddress $hostAddress -Port $port -TimeoutSeconds 6

@@ -417,7 +417,7 @@ class FundingOperationStore:
             WHERE id IN (
                 SELECT id
                 FROM funding_operations
-                ORDER BY created_at_ms DESC, id DESC
+                ORDER BY updated_at_ms DESC, created_at_ms DESC, id DESC
                 LIMIT -1 OFFSET ?
             )
             """,

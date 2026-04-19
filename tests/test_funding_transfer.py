@@ -1154,6 +1154,120 @@ async def test_funding_operation_store_lists_most_recently_updated_entry_first(t
 
 
 @pytest.mark.asyncio
+async def test_funding_operation_store_trim_keeps_most_recently_updated_entries(tmp_path: Path) -> None:
+    db_path = tmp_path / "history.db"
+    store = FundingOperationStore(db_path, max_rows=2, idempotency_ttl_seconds=600)
+    try:
+        await store.create_operation(
+            main_id="group_a",
+            direction="distribute",
+            asset="USDT",
+            request_id="req-old",
+            operation_id="older-created",
+            payload_hash="hash-old",
+            execution_stage="completed",
+            operation_status="operation_fully_succeeded",
+            account_count=1,
+            success_count=1,
+            failure_count=0,
+            confirmed_count=1,
+            pending_confirmation_count=0,
+            message="older operation",
+            response={
+                "direction": "distribute",
+                "asset": "USDT",
+                "operation_id": "older-created",
+                "operation_status": "operation_fully_succeeded",
+                "execution_stage": "completed",
+                "results": [{"account_id": "group_a.sub1", "success": True, "transfer_attempted": True}],
+                "reconciliation": {"confirmed_count": 1, "results": [{"account_id": "group_a.sub1", "confirmed": True}]},
+                "message": "older operation",
+            },
+        )
+        await store.create_operation(
+            main_id="group_a",
+            direction="collect",
+            asset="USDT",
+            request_id="req-middle",
+            operation_id="middle-created",
+            payload_hash="hash-middle",
+            execution_stage="completed",
+            operation_status="operation_fully_succeeded",
+            account_count=1,
+            success_count=1,
+            failure_count=0,
+            confirmed_count=1,
+            pending_confirmation_count=0,
+            message="middle operation",
+            response={
+                "direction": "collect",
+                "asset": "USDT",
+                "operation_id": "middle-created",
+                "operation_status": "operation_fully_succeeded",
+                "execution_stage": "completed",
+                "results": [{"account_id": "group_a.sub2", "success": True, "transfer_attempted": True}],
+                "reconciliation": {"confirmed_count": 1, "results": [{"account_id": "group_a.sub2", "confirmed": True}]},
+                "message": "middle operation",
+            },
+        )
+        await store.update_operation(
+            main_id="group_a",
+            direction="distribute",
+            operation_id="older-created",
+            execution_stage="completed",
+            operation_status="operation_fully_succeeded",
+            account_count=1,
+            success_count=1,
+            failure_count=0,
+            confirmed_count=1,
+            pending_confirmation_count=0,
+            message="older operation updated later",
+            response={
+                "direction": "distribute",
+                "asset": "USDT",
+                "operation_id": "older-created",
+                "operation_status": "operation_fully_succeeded",
+                "execution_stage": "completed",
+                "results": [{"account_id": "group_a.sub1", "success": True, "transfer_attempted": True}],
+                "reconciliation": {"confirmed_count": 1, "results": [{"account_id": "group_a.sub1", "confirmed": True}]},
+                "message": "older operation updated later",
+                "updated_at": datetime.now(UTC).isoformat(),
+            },
+        )
+        await store.create_operation(
+            main_id="group_a",
+            direction="distribute",
+            asset="USDT",
+            request_id="req-new",
+            operation_id="newer-created",
+            payload_hash="hash-new",
+            execution_stage="completed",
+            operation_status="operation_fully_succeeded",
+            account_count=1,
+            success_count=1,
+            failure_count=0,
+            confirmed_count=1,
+            pending_confirmation_count=0,
+            message="newer operation",
+            response={
+                "direction": "distribute",
+                "asset": "USDT",
+                "operation_id": "newer-created",
+                "operation_status": "operation_fully_succeeded",
+                "execution_stage": "completed",
+                "results": [{"account_id": "group_a.sub3", "success": True, "transfer_attempted": True}],
+                "reconciliation": {"confirmed_count": 1, "results": [{"account_id": "group_a.sub3", "confirmed": True}]},
+                "message": "newer operation",
+            },
+        )
+        entries = await store.list_operations("group_a")
+    finally:
+        await store.close()
+
+    assert [entry["operation_id"] for entry in entries] == ["older-created", "newer-created"]
+
+
+@pytest.mark.asyncio
 async def test_collect_rejects_fractional_amount_when_available_balance_is_integer(tmp_path: Path) -> None:
     child = _build_child("sub1", uid="223456789")
     service = _build_service(tmp_path, children=(child,))

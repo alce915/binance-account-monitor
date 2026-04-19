@@ -7,7 +7,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -187,6 +187,17 @@ class Settings(BaseSettings):
     funding_max_total_amount_per_operation: Decimal = Decimal("10000")
     funding_idempotency_ttl_seconds: int = 600
     funding_audit_max_rows: int = 2_000
+    tg_enabled: bool = False
+    tg_bot_token: str = ""
+    tg_chat_id: str = ""
+    tg_proxy_url: str = ""
+    tg_max_queue_size: int = 50
+    tg_dry_run: bool = False
+    unimmr_alerts_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("UNI_MMR_ALERTS_ENABLED", "UNIMMR_ALERTS_ENABLED"),
+    )
+    unimmr_alert_event_max_rows: int = 2_000
 
     monitor_accounts: dict[str, MonitorAccountConfig] = Field(default_factory=dict)
     monitor_main_accounts: dict[str, MainAccountConfig] = Field(default_factory=dict)

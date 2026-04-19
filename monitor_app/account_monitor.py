@@ -11,7 +11,24 @@ from uuid import uuid4
 from monitor_app.binance import BinanceMonitorGateway, RefreshMarkPriceProvider
 from monitor_app.config import MonitorAccountConfig, Settings
 from monitor_app.history_store import MonitorHistoryStore
+from monitor_app.i18n import (
+    account_snapshot_updated_message,
+    all_accounts_failed_message,
+    all_accounts_healthy_message,
+    auto_refresh_failed_message,
+    auto_refresh_timeout_message,
+    monitor_accounts_reloaded_message,
+    monitoring_disabled_message,
+    no_accounts_available_message,
+    refresh_completed_message,
+    refresh_failed_message,
+    refresh_timeout_message,
+    some_accounts_failed_message,
+    waiting_for_monitor_connection_message,
+)
 from monitor_app.security import sanitize_error_summary
+from monitor_app.telegram_notifications import TelegramNotificationService
+from monitor_app.unimmr_alerts import UniMmrAlertService
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -52,13 +69,20 @@ class AccountMonitorController:
         self._gateway_factory = gateway_factory or (
             lambda account: BinanceMonitorGateway(settings, account, history_store=self._history_store)
         )
+        self._telegram_notifications = TelegramNotificationService(settings)
+        self._unimmr_alerts = UniMmrAlertService(settings, notifier=self._telegram_notifications)
         self._gateways: dict[str, UnifiedAccountGateway] = {}
         self._subscriptions: dict[asyncio.Queue[dict[str, Any]], set[str] | None] = {}
         self._lock = asyncio.Lock()
         self._refresh_lock = asyncio.Lock()
         self._refresh_task: asyncio.Task[None] | None = None
         self._monitor_enabled = True
-        self._last_payload = self._build_idle_payload("idle", "Waiting for monitor connection")
+        self._last_payload = self._build_idle_payload("idle", waiting_for_monitor_connection_message())
+
+    async def start(self) -> None:
+        await self._telegram_notifications.start()
+        if self._monitor_enabled and self._settings.unimmr_alerts_enabled and self._refresh_task is None:
+            self._refresh_task = asyncio.create_task(self._run_loop())
 
     def _utc_now(self) -> str:
         return datetime.now(UTC).isoformat()
@@ -145,12 +169,15 @@ class AccountMonitorController:
                 except asyncio.CancelledError:
                     pass
                 self._refresh_task = None
-        elif self._subscriptions and self._refresh_task is None:
+        elif (self._subscriptions or self._settings.unimmr_alerts_enabled) and self._refresh_task is None:
             self._refresh_task = asyncio.create_task(self._run_loop())
         await self._broadcast(self._last_payload)
         return self.current_summary()
 
     async def refresh_now(self) -> dict[str, Any]:
+        return await self._refresh_now_i18n()
+
+    async def _refresh_now_i18n(self) -> dict[str, Any]:
         started_at = perf_counter()
         refresh_id = self._new_refresh_id()
         try:
@@ -161,7 +188,7 @@ class AccountMonitorController:
             payload["refresh_result"] = {
                 "success": False,
                 "timeout": True,
-                "message": "刷新超时，已保留当前数据",
+                "message": refresh_timeout_message(),
                 "updated_at": self._utc_now(),
                 "duration_ms": exc.duration_ms,
                 "refresh_id": exc.refresh_id,
@@ -171,7 +198,6 @@ class AccountMonitorController:
                 "slow_accounts": [],
                 "timings": {"total_ms": exc.duration_ms},
             }
-            payload["refresh_result"]["message"] = "刷新超时，已保留当前数据"
             return payload
         except Exception as exc:
             duration_ms = int((perf_counter() - started_at) * 1000)
@@ -179,7 +205,7 @@ class AccountMonitorController:
             payload["refresh_result"] = {
                 "success": False,
                 "timeout": False,
-                "message": sanitize_error_summary(exc, fallback="Refresh failed"),
+                "message": refresh_failed_message(sanitize_error_summary(exc, fallback="Refresh failed")),
                 "updated_at": self._utc_now(),
                 "duration_ms": duration_ms,
                 "refresh_id": refresh_id,
@@ -193,9 +219,10 @@ class AccountMonitorController:
 
         payload = self.current_groups()
         refresh_meta = candidate_payload.get("refresh_meta") or {}
-        refresh_message = candidate_payload.get("message") or payload.get("message") or "Refresh completed"
+        refresh_message = refresh_completed_message()
         if not committed:
-            refresh_message = f"刷新失败，已保留当前数据：{refresh_message}"
+            refresh_detail = candidate_payload.get("message") or payload.get("message") or refresh_completed_message()
+            refresh_message = refresh_failed_message(refresh_detail)
         payload["refresh_result"] = {
             "success": committed,
             "timeout": False,
@@ -209,8 +236,6 @@ class AccountMonitorController:
             "slow_accounts": refresh_meta.get("slow_accounts", []),
             "timings": refresh_meta.get("timings", {"total_ms": duration_ms}),
         }
-        if not committed:
-            payload["refresh_result"]["message"] = f"刷新失败，已保留当前数据：{candidate_payload.get('message') or payload.get('message') or 'Refresh completed'}"
         return payload
 
     async def reload_accounts(self) -> dict[str, Any]:
@@ -225,14 +250,16 @@ class AccountMonitorController:
                     await gateway.close()
                     self._gateways.pop(account_id, None)
 
-            self._last_payload = self._build_idle_payload("idle", "Monitor accounts reloaded")
+            self._last_payload = self._build_idle_payload("idle", monitor_accounts_reloaded_message())
+            broadcast_payload = self._last_payload
+            reloaded_payload = self.current_groups()
 
-        await self._broadcast(self._last_payload)
-        return self.current_groups()
+        await self._broadcast(broadcast_payload)
+        return reloaded_payload
 
     def unsubscribe(self, queue: asyncio.Queue[dict[str, Any]]) -> None:
         self._subscriptions.pop(queue, None)
-        if not self._subscriptions and self._refresh_task is not None:
+        if not self._subscriptions and self._refresh_task is not None and not self._settings.unimmr_alerts_enabled:
             self._refresh_task.cancel()
             self._refresh_task = None
 
@@ -247,10 +274,65 @@ class AccountMonitorController:
         for gateway in self._gateways.values():
             await gateway.close()
         self._gateways.clear()
+        await self._unimmr_alerts.close()
+        await self._telegram_notifications.close()
         await self._history_store.close()
 
+    async def send_test_telegram_notification(self, message: str | None = None) -> dict[str, Any]:
+        return await self._unimmr_alerts.send_test_notification(message)
+
+    async def unimmr_alert_status(self) -> dict[str, Any]:
+        return await self._unimmr_alerts.status_summary(monitor_enabled=self._monitor_enabled)
+
+    async def simulate_unimmr_alerts(self, updates: list[dict[str, Any]]) -> dict[str, Any]:
+        if not updates:
+            raise ValueError("UniMMR simulation updates are required")
+
+        normalized_updates: dict[str, Decimal] = {}
+        for item in updates:
+            account_id = str(item.get("account_id") or "").strip().lower()
+            if not account_id:
+                raise ValueError("UniMMR simulation account_id is required")
+            try:
+                normalized_updates[account_id] = Decimal(str(item.get("uni_mmr")))
+            except Exception as exc:
+                raise ValueError(f"Invalid UniMMR simulation value for {account_id}") from exc
+
+        async with self._refresh_lock:
+            accounts = [
+                dict(account)
+                for account in self._last_payload.get("accounts", [])
+                if isinstance(account, dict)
+            ]
+
+        if not accounts:
+            raise ValueError("No current accounts available for UniMMR simulation")
+
+        account_map = {
+            str(account.get("account_id") or "").strip().lower(): account
+            for account in accounts
+        }
+        missing = [account_id for account_id in normalized_updates if account_id not in account_map]
+        if missing:
+            raise ValueError(f"Unknown UniMMR simulation account_id: {missing[0]}")
+
+        simulation_accounts: list[dict[str, Any]] = []
+        applied_updates: list[dict[str, Any]] = []
+        for account_id, value in normalized_updates.items():
+            account = dict(account_map[account_id])
+            account["status"] = "ok"
+            account["uni_mmr"] = value
+            simulation_accounts.append(account)
+            applied_updates.append({"account_id": account_id, "uni_mmr": str(value)})
+
+        result = await self._unimmr_alerts.simulate_payload({"accounts": simulation_accounts})
+        result["updates"] = applied_updates
+        return result
+
     async def _run_loop(self) -> None:
-        interval_seconds = max(self._settings.monitor_refresh_interval_ms / 1000, 1.0)
+        await self._run_loop_i18n()
+
+    async def _run_loop_i18n(self) -> None:
         while True:
             refresh_id = self._new_refresh_id()
             try:
@@ -263,7 +345,7 @@ class AccountMonitorController:
                     exc.refresh_id,
                     exc.duration_ms,
                 )
-                await self._publish_refresh_warning("自动刷新超时，已保留当前数据")
+                await self._publish_refresh_warning(auto_refresh_timeout_message())
             except Exception as exc:
                 safe_message = sanitize_error_summary(exc, fallback="Auto refresh failed")
                 logger.exception(
@@ -271,8 +353,14 @@ class AccountMonitorController:
                     refresh_id,
                     safe_message,
                 )
-                await self._publish_refresh_warning(f"自动刷新失败，已保留当前数据：{safe_message}")
-            await asyncio.sleep(interval_seconds)
+                await self._publish_refresh_warning(auto_refresh_failed_message(safe_message))
+            await asyncio.sleep(self._next_refresh_interval_seconds())
+
+    def _next_refresh_interval_seconds(self) -> float:
+        base_interval_seconds = max(self._settings.monitor_refresh_interval_ms / 1000, 1.0)
+        if self._unimmr_alerts.has_danger_accounts():
+            return min(base_interval_seconds, 300.0)
+        return base_interval_seconds
 
     async def _publish_refresh_warning(self, message: str) -> None:
         async with self._refresh_lock:
@@ -311,6 +399,7 @@ class AccountMonitorController:
             payload["refresh_meta"]["timings"]["collect_payload_ms"] = collect_payload_ms
             payload["refresh_meta"]["reason"] = reason
             if self._should_commit_payload(payload):
+                await self._unimmr_alerts.evaluate_payload(payload)
                 broadcast_started_at = perf_counter()
                 self._last_payload = payload
                 await self._broadcast(payload)
@@ -363,7 +452,7 @@ class AccountMonitorController:
     async def _collect_payload(self, *, refresh_id: str) -> dict[str, Any]:
         accounts = list(self._settings.monitor_accounts.values())
         if not accounts:
-            return self._build_idle_payload("error", "No monitor accounts configured")
+            return self._build_idle_payload("error", no_accounts_available_message())
 
         previous_snapshots = {
             str(account.get("account_id") or ""): account
@@ -415,7 +504,7 @@ class AccountMonitorController:
             snapshot.setdefault("main_account_name", account.main_account_name)
             snapshot.setdefault("child_account_id", account.child_account_id)
             snapshot.setdefault("child_account_name", account.child_account_name)
-            snapshot.setdefault("message", "Account snapshot updated")
+            snapshot.setdefault("message", account_snapshot_updated_message())
             snapshot.setdefault("diagnostics", {})
             snapshot["diagnostics"].setdefault("refresh_id", refresh_id)
             snapshot["diagnostics"].setdefault("timings", {})
@@ -484,7 +573,7 @@ class AccountMonitorController:
                 stale.append(queue)
         for queue in stale:
             self._subscriptions.pop(queue, None)
-        if not self._subscriptions and self._refresh_task is not None:
+        if not self._subscriptions and self._refresh_task is not None and not self._settings.unimmr_alerts_enabled:
             self._refresh_task.cancel()
             self._refresh_task = None
 
@@ -586,7 +675,7 @@ class AccountMonitorController:
         return {
             **payload,
             "status": "disabled",
-            "message": "Monitoring disabled",
+            "message": monitoring_disabled_message(),
             "service": service,
         }
 
@@ -656,12 +745,12 @@ class AccountMonitorController:
 
     def _status_and_message(self, summary: dict[str, Any]) -> tuple[str, str]:
         if summary["account_count"] == 0:
-            return "idle", "No accounts available"
+            return "idle", no_accounts_available_message()
         if summary["error_count"] == 0:
-            return "ok", "All accounts are healthy"
+            return "ok", all_accounts_healthy_message()
         if summary["success_count"] == 0:
-            return "error", "All accounts failed"
-        return "partial", "Some accounts failed"
+            return "error", all_accounts_failed_message()
+        return "partial", some_accounts_failed_message()
 
     def _summarize_accounts(self, accounts: list[dict[str, Any]]) -> dict[str, Any]:
         totals = self._empty_totals()

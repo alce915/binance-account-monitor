@@ -1,5 +1,37 @@
 $ErrorActionPreference = 'Stop'
 
+function Get-MonitorCmdPath {
+    $candidate = Join-Path $env:SystemRoot 'System32\cmd.exe'
+    if (Test-Path $candidate) {
+        return $candidate
+    }
+    return 'cmd.exe'
+}
+
+function Get-MonitorNetstatPath {
+    $candidate = Join-Path $env:SystemRoot 'System32\netstat.exe'
+    if (Test-Path $candidate) {
+        return $candidate
+    }
+    return 'netstat.exe'
+}
+
+function Get-MonitorTaskkillPath {
+    $candidate = Join-Path $env:SystemRoot 'System32\taskkill.exe'
+    if (Test-Path $candidate) {
+        return $candidate
+    }
+    return 'taskkill.exe'
+}
+
+function Get-MonitorPowerShellPath {
+    $candidate = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (Test-Path $candidate) {
+        return $candidate
+    }
+    return 'powershell.exe'
+}
+
 function Test-MonitorElevationBypass {
     $value = [string]$env:MONITOR_SCRIPT_SKIP_ELEVATION
     if (-not $value) {
@@ -38,7 +70,7 @@ function Ensure-MonitorAdmin {
         $argumentList += '-NoExit'
     }
     $argumentList += '-ExecutionPolicy', 'Bypass', '-File', "`"$ScriptPath`""
-    Start-Process -FilePath 'powershell.exe' -ArgumentList $argumentList -WindowStyle Normal -Verb RunAs | Out-Null
+    Start-Process -FilePath (Get-MonitorPowerShellPath) -ArgumentList $argumentList -WindowStyle Normal -Verb RunAs | Out-Null
     return $false
 }
 
@@ -164,7 +196,7 @@ function Get-ListenerPids {
     } catch {
     }
 
-    $netstatLines = cmd /d /c "netstat -ano -p tcp"
+    $netstatLines = & (Get-MonitorNetstatPath) -ano -p tcp
     foreach ($line in $netstatLines) {
         if ($line -match "^\s*TCP\s+\S+:$Port\s+\S+\s+LISTENING\s+(\d+)\s*$") {
             [void]$pids.Add([int]$matches[1])
@@ -226,7 +258,7 @@ function Invoke-MonitorProcessTermination {
     }
 
     try {
-        cmd /d /c "taskkill /PID $ProcessId /F /T" *> $null
+        & (Get-MonitorTaskkillPath) /PID $ProcessId /F /T *> $null
         if ($LASTEXITCODE -eq 0) {
             return $true
         }

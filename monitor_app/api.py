@@ -21,6 +21,7 @@ from monitor_app.account_import import (
 )
 from monitor_app.config import settings
 from monitor_app.funding_transfer import FundingTransferError, FundingTransferRequestRejected, FundingTransferService
+from monitor_app.i18n import excel_import_refresh_failed_message, excel_import_refresh_success_message
 from monitor_app.log_maintenance import log_trim_loop
 from monitor_app.security import (
     is_loopback_client,
@@ -48,6 +49,7 @@ async def lifespan(app: FastAPI):
     app.state.funding_transfer = funding_transfer
     app.state.allow_test_non_loopback = False
     try:
+        await monitor.start()
         yield
     finally:
         log_trim_stop.set()
@@ -108,6 +110,19 @@ class FundingCollectRequest(BaseModel):
     operation_id: str
     transfers: list[FundingCollectItem] = Field(default_factory=list)
     account_ids: list[str] = Field(default_factory=list)
+
+
+class TelegramTestRequest(BaseModel):
+    message: str = ""
+
+
+class UniMmrSimulateItem(BaseModel):
+    account_id: str
+    uni_mmr: str
+
+
+class UniMmrSimulateRequest(BaseModel):
+    updates: list[UniMmrSimulateItem] = Field(default_factory=list)
 
 
 @app.exception_handler(RequestValidationError)
@@ -215,6 +230,10 @@ async def import_monitor_accounts_excel(file: UploadFile = File(...)) -> dict:
         response["message"] = "Excel 导入成功，数据已刷新"
     else:
         response["message"] = "Excel 导入成功，但刷新失败"
+    if response.get("refresh_result", {}).get("success", False):
+        response["message"] = excel_import_refresh_success_message()
+    else:
+        response["message"] = excel_import_refresh_failed_message()
     return sanitize_monitor_payload(response)
 
 
@@ -274,6 +293,34 @@ async def collect_group_funding(main_id: str, payload: FundingCollectRequest) ->
         return funding_success_response(result)
     except FundingTransferError as exc:
         return funding_error_response(exc)
+
+
+@app.post("/api/alerts/telegram/test")
+async def test_telegram_alert(payload: TelegramTestRequest) -> dict:
+    monitor: AccountMonitorController = app.state.monitor
+    return {
+        "result": await monitor.send_test_telegram_notification(payload.message),
+        "stats": await monitor.unimmr_alert_status(),
+    }
+
+
+@app.get("/api/alerts/unimmr/status")
+async def get_unimmr_alert_status() -> dict:
+    monitor: AccountMonitorController = app.state.monitor
+    return await monitor.unimmr_alert_status()
+
+
+@app.post("/api/alerts/unimmr/simulate")
+async def simulate_unimmr_alert(payload: UniMmrSimulateRequest) -> dict:
+    monitor: AccountMonitorController = app.state.monitor
+    try:
+        result = await monitor.simulate_unimmr_alerts([item.model_dump() for item in payload.updates])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=sanitize_error_summary(exc)) from exc
+    return {
+        "result": result,
+        "stats": await monitor.unimmr_alert_status(),
+    }
 
 
 @app.get("/api/config/import/excel-template")

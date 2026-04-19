@@ -5,6 +5,17 @@ from decimal import Decimal
 import re
 from typing import Any
 
+from monitor_app.i18n import (
+    all_accounts_healthy_message,
+    auto_refresh_failed_message,
+    auto_refresh_timeout_message,
+    excel_import_refresh_failed_message,
+    excel_import_refresh_success_message,
+    refresh_completed_message,
+    refresh_failed_message,
+    refresh_timeout_message,
+)
+
 
 REDACTED = "[redacted]"
 REDACTED_EMAIL = "[redacted-email]"
@@ -118,7 +129,7 @@ def minimize_history_payload(
 
 def sanitize_monitor_payload(payload: dict[str, Any]) -> dict[str, Any]:
     public_payload = deepcopy(payload)
-    public_payload["message"] = sanitize_text(public_payload.get("message"))
+    public_payload["message"] = _normalize_monitor_message(sanitize_text(public_payload.get("message")))
     service = public_payload.get("service")
     if isinstance(service, dict):
         public_service = {"monitor_enabled": service.get("monitor_enabled", True)}
@@ -203,7 +214,7 @@ def _sanitize_monitor_account(account: dict[str, Any]) -> dict[str, Any]:
 
 def _sanitize_refresh_result(refresh_result: dict[str, Any]) -> dict[str, Any]:
     public_result = deepcopy(refresh_result)
-    public_result["message"] = sanitize_text(public_result.get("message"))
+    public_result["message"] = _normalize_monitor_message(sanitize_text(public_result.get("message")))
     public_result.pop("refresh_id", None)
     public_result.pop("failed_accounts", None)
     public_result.pop("slow_accounts", None)
@@ -222,6 +233,35 @@ def _sanitize_refresh_result(refresh_result: dict[str, Any]) -> dict[str, Any]:
     else:
         public_result.pop("timings", None)
     return public_result
+
+
+def _normalize_monitor_message(value: Any) -> str:
+    message = sanitize_text(value)
+    if not message:
+        return message
+
+    direct_map = {
+        "All accounts are healthy": all_accounts_healthy_message(),
+        "Refresh completed": refresh_completed_message(),
+        "鍒锋柊瓒呮椂锛屽凡淇濈暀褰撳墠鏁版嵁": refresh_timeout_message(),
+        "鑷姩鍒锋柊瓒呮椂锛屽凡淇濈暀褰撳墠鏁版嵁": auto_refresh_timeout_message(),
+        "Excel 瀵煎叆鎴愬姛锛屾暟鎹凡鍒锋柊": excel_import_refresh_success_message(),
+        "Excel 瀵煎叆鎴愬姛锛屼絾鍒锋柊澶辫触": excel_import_refresh_failed_message(),
+    }
+    if message in direct_map:
+        return direct_map[message]
+
+    refresh_failed_prefix = "鍒锋柊澶辫触锛屽凡淇濈暀褰撳墠鏁版嵁锛歿"
+    if message.startswith(refresh_failed_prefix):
+        detail = message[len(refresh_failed_prefix) :].strip()
+        return refresh_failed_message(detail)
+
+    auto_refresh_failed_prefix = "鑷姩鍒锋柊澶辫触锛屽凡淇濈暀褰撳墠鏁版嵁锛歿"
+    if message.startswith(auto_refresh_failed_prefix):
+        detail = message[len(auto_refresh_failed_prefix) :].strip()
+        return auto_refresh_failed_message(detail)
+
+    return message
 
 
 def _sanitize_funding_account(account: dict[str, Any]) -> dict[str, Any]:

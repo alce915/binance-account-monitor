@@ -12,6 +12,8 @@ from monitor_app.config import MainAccountConfig, MonitorAccountConfig, Settings
 
 
 class FakeMonitorGateway:
+    call_counts: dict[str, int] = {}
+
     def __init__(self, account: MonitorAccountConfig) -> None:
         self.account = account
 
@@ -25,6 +27,7 @@ class FakeMonitorGateway:
         mark_price_provider=None,
         refresh_id: str | None = None,
     ) -> dict:
+        FakeMonitorGateway.call_counts[self.account.account_id] = FakeMonitorGateway.call_counts.get(self.account.account_id, 0) + 1
         return {
             "status": "ok",
             "source": "papi",
@@ -88,6 +91,7 @@ class FakeMonitorGateway:
 
 @pytest.mark.asyncio
 async def test_account_monitor_controller_groups_and_filters_accounts(tmp_path: Path) -> None:
+    FakeMonitorGateway.call_counts = {}
     settings = Settings(
         _env_file=None,
         monitor_refresh_interval_ms=50,
@@ -129,6 +133,39 @@ async def test_account_monitor_controller_groups_and_filters_accounts(tmp_path: 
 
 
 @pytest.mark.asyncio
+async def test_account_monitor_background_refresh_runs_without_subscribers_after_start(tmp_path: Path) -> None:
+    FakeMonitorGateway.call_counts = {}
+    settings = Settings(
+        _env_file=None,
+        monitor_refresh_interval_ms=50,
+        monitor_history_window_days=3,
+        monitor_history_db_path=tmp_path / "history.db",
+        unimmr_alerts_enabled=True,
+    )
+    account = MonitorAccountConfig(
+        account_id="group_a.sub1",
+        child_account_id="sub1",
+        child_account_name="Sub One",
+        main_account_id="group_a",
+        main_account_name="Group A",
+        api_key="k1",
+        api_secret="s1",
+    )
+    settings.monitor_accounts = {account.account_id: account}
+    settings.monitor_main_accounts = {
+        "group_a": MainAccountConfig(main_id="group_a", name="Group A", children=(account,)),
+    }
+    controller = AccountMonitorController(settings, gateway_factory=lambda selected: FakeMonitorGateway(selected))
+    try:
+        await controller.start()
+        await asyncio.sleep(0.12)
+    finally:
+        await controller.close()
+
+    assert FakeMonitorGateway.call_counts["group_a.sub1"] >= 2
+
+
+@pytest.mark.asyncio
 async def test_account_monitor_controller_can_disable_and_enable_monitoring(tmp_path: Path) -> None:
     settings = Settings(
         _env_file=None,
@@ -166,8 +203,10 @@ async def test_account_monitor_controller_can_disable_and_enable_monitoring(tmp_
         await controller.close()
 
     assert disabled["status"] == "disabled"
+    assert disabled["message"] == "监控已禁用"
     assert disabled["service"]["monitor_enabled"] is False
     assert disabled_event["data"]["status"] == "disabled"
+    assert disabled_event["data"]["message"] == "监控已禁用"
     assert disabled_event["data"]["service"]["monitor_enabled"] is False
 
     assert enabled["service"]["monitor_enabled"] is True
@@ -303,6 +342,7 @@ async def test_refresh_failure_preserves_previous_payload(tmp_path: Path) -> Non
     assert first["refresh_result"]["failed_accounts"] == []
     assert first["refresh_result"]["fallback_sections"] == []
     assert second["refresh_result"]["success"] is False
+    assert second["refresh_result"]["message"].startswith("刷新失败，已保留当前数据：")
     assert second["updated_at"] == first_updated_at
     assert second["summary"]["account_count"] == 1
     assert second["summary"]["success_count"] == 1
@@ -426,7 +466,7 @@ async def test_refresh_partial_failure_commits_partial_payload(tmp_path: Path) -
     assert first["refresh_result"]["success"] is True
     assert second["refresh_result"]["success"] is True
     assert second["status"] == "partial"
-    assert second["message"] == "Some accounts failed"
+    assert second["message"] == "部分账号刷新失败"
     assert second["summary"]["account_count"] == 2
     assert second["summary"]["success_count"] == 1
     assert second["summary"]["error_count"] == 1
@@ -441,6 +481,192 @@ async def test_refresh_partial_failure_commits_partial_payload(tmp_path: Path) -
     )
     assert failing_account["status"] == "error"
     assert failing_account["message"] == "temporary refresh failure"
+
+
+class RecordingUniMmrAlerts:
+    def __init__(self) -> None:
+        self.payloads: list[dict] = []
+
+    async def evaluate_payload(self, payload: dict) -> dict:
+        self.payloads.append(payload)
+        return {"triggered": 1, "has_danger": True, "queued": True}
+
+    async def simulate_payload(self, payload: dict) -> dict:
+        self.payloads.append(payload)
+        return {"triggered": 1, "has_danger": True, "queued": True, "simulated": True}
+
+    async def status_summary(self, *, monitor_enabled: bool | None = None) -> dict:
+        return {
+            "enabled": True if monitor_enabled is None else bool(monitor_enabled),
+            "configured": True,
+            "monitor_enabled": True if monitor_enabled is None else bool(monitor_enabled),
+            "telegram": {},
+            "accounts": [],
+        }
+
+    async def close(self) -> None:
+        return None
+
+    def has_danger_accounts(self) -> bool:
+        return False
+
+
+@pytest.mark.asyncio
+async def test_simulate_unimmr_alerts_overrides_current_snapshot_values(tmp_path: Path) -> None:
+    settings = Settings(
+        _env_file=None,
+        monitor_refresh_interval_ms=50,
+        monitor_history_window_days=3,
+        monitor_history_db_path=tmp_path / "history.db",
+        unimmr_alerts_enabled=True,
+    )
+    account = MonitorAccountConfig(
+        account_id="group_a.sub1",
+        child_account_id="sub1",
+        child_account_name="Sub One",
+        main_account_id="group_a",
+        main_account_name="Group A",
+        api_key="k1",
+        api_secret="s1",
+    )
+    account2 = MonitorAccountConfig(
+        account_id="group_a.sub2",
+        child_account_id="sub2",
+        child_account_name="Sub Two",
+        main_account_id="group_a",
+        main_account_name="Group A",
+        api_key="k2",
+        api_secret="s2",
+    )
+    settings.monitor_accounts = {
+        account.account_id: account
+        for account in (account, account2)
+    }
+    settings.monitor_main_accounts = {
+        "group_a": MainAccountConfig(main_id="group_a", name="Group A", children=(account, account2)),
+    }
+    controller = AccountMonitorController(settings, gateway_factory=lambda selected: FakeMonitorGateway(selected))
+    fake_alerts = RecordingUniMmrAlerts()
+    controller._unimmr_alerts = fake_alerts
+    controller._last_payload = controller._build_payload(
+        [
+            {
+                "status": "ok",
+                "account_id": "group_a.sub1",
+                "account_name": "Group A / Sub One",
+                "main_account_id": "group_a",
+                "main_account_name": "Group A",
+                "child_account_id": "sub1",
+                "child_account_name": "Sub One",
+                "uni_mmr": Decimal("2.80"),
+            },
+            {
+                "status": "ok",
+                "account_id": "group_a.sub2",
+                "account_name": "Group A / Sub Two",
+                "main_account_id": "group_a",
+                "main_account_name": "Group A",
+                "child_account_id": "sub2",
+                "child_account_name": "Sub Two",
+                "uni_mmr": Decimal("2.70"),
+            },
+        ]
+    )
+    try:
+        result = await controller.simulate_unimmr_alerts(
+            [{"account_id": "group_a.sub1", "uni_mmr": Decimal("1.18")}]
+        )
+    finally:
+        await controller.close()
+
+    assert result["triggered"] == 1
+    assert result["simulated"] is True
+    assert len(fake_alerts.payloads[0]["accounts"]) == 1
+    assert fake_alerts.payloads[0]["accounts"][0]["account_id"] == "group_a.sub1"
+    assert fake_alerts.payloads[0]["accounts"][0]["uni_mmr"] == Decimal("1.18")
+
+
+@pytest.mark.asyncio
+async def test_simulate_unimmr_alerts_rejects_unknown_account(tmp_path: Path) -> None:
+    settings = Settings(
+        _env_file=None,
+        monitor_refresh_interval_ms=50,
+        monitor_history_window_days=3,
+        monitor_history_db_path=tmp_path / "history.db",
+        unimmr_alerts_enabled=True,
+    )
+    account = MonitorAccountConfig(
+        account_id="group_a.sub1",
+        child_account_id="sub1",
+        child_account_name="Sub One",
+        main_account_id="group_a",
+        main_account_name="Group A",
+        api_key="k1",
+        api_secret="s1",
+    )
+    settings.monitor_accounts = {account.account_id: account}
+    settings.monitor_main_accounts = {
+        "group_a": MainAccountConfig(main_id="group_a", name="Group A", children=(account,)),
+    }
+    controller = AccountMonitorController(settings, gateway_factory=lambda selected: FakeMonitorGateway(selected))
+    controller._unimmr_alerts = RecordingUniMmrAlerts()
+    controller._last_payload = controller._build_payload(
+        [
+            {
+                "status": "ok",
+                "account_id": "group_a.sub1",
+                "account_name": "Group A / Sub One",
+                "main_account_id": "group_a",
+                "main_account_name": "Group A",
+                "child_account_id": "sub1",
+                "child_account_name": "Sub One",
+                "uni_mmr": Decimal("2.80"),
+            }
+        ]
+    )
+    try:
+        with pytest.raises(ValueError, match="Unknown UniMMR simulation account_id"):
+            await controller.simulate_unimmr_alerts(
+                [{"account_id": "group_a.unknown", "uni_mmr": Decimal("1.18")}]
+            )
+    finally:
+        await controller.close()
+
+
+@pytest.mark.asyncio
+async def test_unimmr_alert_status_reports_disabled_when_monitor_is_off(tmp_path: Path) -> None:
+    settings = Settings(
+        _env_file=None,
+        monitor_refresh_interval_ms=50,
+        monitor_history_window_days=3,
+        monitor_history_db_path=tmp_path / "history.db",
+        unimmr_alerts_enabled=True,
+    )
+    account = MonitorAccountConfig(
+        account_id="group_a.sub1",
+        child_account_id="sub1",
+        child_account_name="Sub One",
+        main_account_id="group_a",
+        main_account_name="Group A",
+        api_key="k1",
+        api_secret="s1",
+    )
+    settings.monitor_accounts = {account.account_id: account}
+    settings.monitor_main_accounts = {
+        "group_a": MainAccountConfig(main_id="group_a", name="Group A", children=(account,)),
+    }
+    controller = AccountMonitorController(settings, gateway_factory=lambda selected: FakeMonitorGateway(selected))
+    try:
+        await controller.start()
+        enabled_status = await controller.unimmr_alert_status()
+        await controller.set_monitor_enabled(False)
+        disabled_status = await controller.unimmr_alert_status()
+    finally:
+        await controller.close()
+
+    assert enabled_status["enabled"] is True
+    assert disabled_status["enabled"] is False
+    assert disabled_status["monitor_enabled"] is False
 
 
 class TrackingGateway(FakeMonitorGateway):
