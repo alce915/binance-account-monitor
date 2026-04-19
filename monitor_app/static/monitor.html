@@ -1478,8 +1478,29 @@
       return accounts.find((account) => String(account.account_id || '') === selectedAccountId) || accounts[0];
     }
 
+    function distributionDisplayAmount(summary = {}, profitSummary = null, accounts = []) {
+      const cumulativeAmount = profitSummary?.all?.amount;
+      if (cumulativeAmount !== undefined && cumulativeAmount !== null && String(cumulativeAmount).trim() !== '') {
+        return cumulativeAmount;
+      }
+      if (Array.isArray(accounts) && accounts.length) {
+        const cumulativeTotal = accounts.reduce((total, account) => {
+          const accountAmount = Number(account?.distribution_profit_summary?.all?.amount ?? 0);
+          if (!Number.isFinite(accountAmount)) {
+            return total;
+          }
+          return total + accountAmount;
+        }, 0);
+        if (Math.abs(cumulativeTotal) >= 1e-9) {
+          return cumulativeTotal;
+        }
+      }
+      return summary?.total_distribution ?? 0;
+    }
+
     function renderAccount(account) {
       const totals = account.totals || {};
+      const distributionAmount = distributionDisplayAmount(totals, account.distribution_profit_summary);
       const accountTitle = escapeHtml(account.child_account_name || account.account_name || account.account_id || '-');
       const accountId = escapeHtml(account.account_id || '-');
       const accountStatus = escapeHtml(textAccountStatus(account.account_status));
@@ -1499,7 +1520,7 @@
               { label: '保证金', value: fmt(totals.margin), tone: '' },
               { label: '可用余额', value: fmt(totals.available_balance), tone: '' },
               { label: '未实现盈亏', value: fmt(totals.unrealized_pnl), tone: numberTone(totals.unrealized_pnl) },
-              { label: '分发收益', value: fmt(totals.total_distribution), tone: numberTone(totals.total_distribution) },
+              { label: '分发收益', value: fmt(distributionAmount), tone: numberTone(distributionAmount) },
               { label: '7日年化', value: fmtPercent(totals.distribution_apy_7d), tone: numberTone(totals.distribution_apy_7d) },
             ].map(({ label, value, tone }) => `
               <div class="metric">
@@ -1572,6 +1593,7 @@
       const summary = group.summary || {};
       const mainAccountId = String(group.main_account_id || '');
       const accounts = Array.isArray(group.accounts) ? group.accounts : [];
+      const distributionAmount = distributionDisplayAmount(summary, group.profit_summary, accounts);
       const expanded = isGroupExpanded(mainAccountId);
       const activeAccount = resolveSelectedAccount(group);
       const activeAccountId = String(activeAccount?.account_id || '');
@@ -1604,7 +1626,7 @@
               { label: '保证金', value: fmt(summary.margin), tone: '' },
               { label: '可用余额', value: fmt(summary.available_balance), tone: '' },
               { label: '未实现盈亏', value: fmt(summary.unrealized_pnl), tone: numberTone(summary.unrealized_pnl) },
-              { label: '分发收益', value: fmt(summary.total_distribution), tone: numberTone(summary.total_distribution) },
+              { label: '分发收益', value: fmt(distributionAmount), tone: numberTone(distributionAmount) },
               { label: '7日年化', value: fmtPercent(summary.distribution_apy_7d), tone: numberTone(summary.distribution_apy_7d) },
             ].map(({ label, value, tone }) => `
               <div class="metric">

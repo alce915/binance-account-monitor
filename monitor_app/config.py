@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -181,6 +182,11 @@ class Settings(BaseSettings):
     binance_secondary_timeout_ms: int = 2_500
     binance_core_retry_attempts: int = 5
     binance_secondary_retry_attempts: int = 3
+    funding_transfer_write_enabled: bool = True
+    funding_max_accounts_per_operation: int = 20
+    funding_max_total_amount_per_operation: Decimal = Decimal("10000")
+    funding_idempotency_ttl_seconds: int = 600
+    funding_audit_max_rows: int = 2_000
 
     monitor_accounts: dict[str, MonitorAccountConfig] = Field(default_factory=dict)
     monitor_main_accounts: dict[str, MainAccountConfig] = Field(default_factory=dict)

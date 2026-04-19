@@ -642,11 +642,13 @@ class AccountMonitorController:
         groups: list[dict[str, Any]] = []
         for main_account_id in sorted(grouped):
             group_accounts = sorted(grouped[main_account_id], key=lambda item: str(item.get("account_id", "")))
+            group_summary = self._summarize_accounts(group_accounts)
             groups.append(
                 {
                     "main_account_id": main_account_id,
                     "main_account_name": group_accounts[0].get("main_account_name", main_account_id),
-                    "summary": self._summarize_accounts(group_accounts),
+                    "summary": group_summary,
+                    "profit_summary": self._aggregate_profit_summary(group_accounts, group_summary),
                     "accounts": group_accounts,
                 }
             )

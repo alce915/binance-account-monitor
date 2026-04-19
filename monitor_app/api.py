@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -19,7 +20,7 @@ from monitor_app.account_import import (
     write_monitor_accounts_payload,
 )
 from monitor_app.config import settings
-from monitor_app.funding_transfer import FundingTransferError, FundingTransferService
+from monitor_app.funding_transfer import FundingTransferError, FundingTransferRequestRejected, FundingTransferService
 from monitor_app.log_maintenance import log_trim_loop
 from monitor_app.security import (
     is_loopback_client,
@@ -93,6 +94,7 @@ class FundingDistributeItem(BaseModel):
 
 class FundingDistributeRequest(BaseModel):
     asset: str
+    operation_id: str
     transfers: list[FundingDistributeItem]
 
 
@@ -103,8 +105,47 @@ class FundingCollectItem(BaseModel):
 
 class FundingCollectRequest(BaseModel):
     asset: str
+    operation_id: str
     transfers: list[FundingCollectItem] = Field(default_factory=list)
     account_ids: list[str] = Field(default_factory=list)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    path = request.url.path
+    if path.startswith("/api/funding/groups/") and (path.endswith("/distribute") or path.endswith("/collect")):
+        for error in exc.errors():
+            location = error.get("loc") or ()
+            if "operation_id" in location:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "detail": "operation_id is required",
+                        "error": {"code": "OPERATION_ID_REQUIRED", "message": "operation_id is required"},
+                    },
+                )
+    return JSONResponse(status_code=422, content={"detail": exc.errors()})
+
+
+def funding_error_response(exc: FundingTransferError) -> JSONResponse:
+    detail = sanitize_error_summary(exc)
+    error_payload = {"code": "PRECHECK_UNAVAILABLE", "message": detail}
+    headers = {}
+    if isinstance(exc, FundingTransferRequestRejected):
+        error_payload["code"] = exc.code
+        if exc.operation_id:
+            error_payload["operation_id"] = exc.operation_id
+            headers["X-Funding-Operation-Id"] = exc.operation_id
+    return JSONResponse(status_code=400, content={"detail": detail, "error": error_payload}, headers=headers)
+
+
+def funding_success_response(payload: dict) -> JSONResponse:
+    public_payload = sanitize_funding_payload(payload)
+    headers = {}
+    operation_id = str(public_payload.get("operation_id") or "").strip()
+    if operation_id:
+        headers["X-Funding-Operation-Id"] = operation_id
+    return JSONResponse(status_code=200, content=public_payload, headers=headers)
 
 
 @app.get("/", include_in_schema=False)
@@ -186,31 +227,53 @@ async def get_funding_group(main_id: str) -> dict:
         raise HTTPException(status_code=400, detail=sanitize_error_summary(exc)) from exc
 
 
+@app.get("/api/funding/groups/{main_id}/audit")
+async def get_funding_group_audit(main_id: str) -> dict:
+    funding_transfer: FundingTransferService = app.state.funding_transfer
+    try:
+        return sanitize_funding_payload(await funding_transfer.get_audit_entries(main_id))
+    except FundingTransferError as exc:
+        return funding_error_response(exc)
+
+
+@app.get("/api/funding/groups/{main_id}/audit/{operation_id}")
+async def get_funding_group_audit_detail(main_id: str, operation_id: str, direction: str = Query(...)) -> dict:
+    funding_transfer: FundingTransferService = app.state.funding_transfer
+    try:
+        return sanitize_funding_payload(await funding_transfer.get_audit_entry_detail(main_id, operation_id, direction=direction))
+    except FundingTransferError as exc:
+        return funding_error_response(exc)
+
+
 @app.post("/api/funding/groups/{main_id}/distribute")
 async def distribute_group_funding(main_id: str, payload: FundingDistributeRequest) -> dict:
     funding_transfer: FundingTransferService = app.state.funding_transfer
     try:
-        return sanitize_funding_payload(await funding_transfer.distribute(
+        result = await funding_transfer.distribute(
             main_id,
             asset=payload.asset,
+            operation_id=payload.operation_id,
             transfers=[item.model_dump() for item in payload.transfers],
-        ))
+        )
+        return funding_success_response(result)
     except FundingTransferError as exc:
-        raise HTTPException(status_code=400, detail=sanitize_error_summary(exc)) from exc
+        return funding_error_response(exc)
 
 
 @app.post("/api/funding/groups/{main_id}/collect")
 async def collect_group_funding(main_id: str, payload: FundingCollectRequest) -> dict:
     funding_transfer: FundingTransferService = app.state.funding_transfer
     try:
-        return sanitize_funding_payload(await funding_transfer.collect(
+        result = await funding_transfer.collect(
             main_id,
             asset=payload.asset,
+            operation_id=payload.operation_id,
             transfers=[item.model_dump() for item in payload.transfers],
             account_ids=payload.account_ids,
-        ))
+        )
+        return funding_success_response(result)
     except FundingTransferError as exc:
-        raise HTTPException(status_code=400, detail=sanitize_error_summary(exc)) from exc
+        return funding_error_response(exc)
 
 
 @app.get("/api/config/import/excel-template")

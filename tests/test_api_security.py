@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import monitor_app.api as api_module
+from monitor_app.security import is_trusted_loopback_host
 
 
 class FakeMonitor:
@@ -72,6 +73,10 @@ async def test_loopback_guard_rejects_non_loopback_client() -> None:
         response = await client.get("/healthz", headers={"host": "198.51.100.10"})
 
     assert response.status_code in {400, 403}
+
+
+def test_trusted_loopback_host_accepts_ipv6_host_with_port() -> None:
+    assert is_trusted_loopback_host("[::1]:8010") is True
 
 
 def test_monitor_groups_response_is_sanitized_for_public_clients() -> None:

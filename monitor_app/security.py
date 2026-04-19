@@ -51,7 +51,11 @@ def is_trusted_loopback_host(host_header: str | None) -> bool:
     host = str(host_header or "").strip().lower()
     if not host:
         return False
-    hostname = host.split(":", 1)[0]
+    if host.startswith("["):
+        closing_index = host.find("]")
+        hostname = host if closing_index < 0 else host[: closing_index + 1]
+    else:
+        hostname = host.split(":", 1)[0]
     return hostname in TRUSTED_LOOPBACK_HOSTS
 
 
@@ -161,9 +165,21 @@ def sanitize_funding_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if isinstance(results, list):
         public_payload["results"] = [_sanitize_funding_result(result) for result in results if isinstance(result, dict)]
 
+    precheck = public_payload.get("precheck")
+    if isinstance(precheck, dict):
+        public_payload["precheck"] = _sanitize_funding_precheck(precheck)
+
+    reconciliation = public_payload.get("reconciliation")
+    if isinstance(reconciliation, dict):
+        public_payload["reconciliation"] = _sanitize_funding_reconciliation(reconciliation)
+
     overview = public_payload.get("overview")
     if isinstance(overview, dict):
         public_payload["overview"] = sanitize_funding_payload(overview)
+
+    entries = public_payload.get("entries")
+    if isinstance(entries, list):
+        public_payload["entries"] = [sanitize_funding_payload(entry) for entry in entries if isinstance(entry, dict)]
 
     return public_payload
 
@@ -231,3 +247,37 @@ def _sanitize_funding_result(result: dict[str, Any]) -> dict[str, Any]:
     public_result["uid"] = mask_uid(public_result.get("uid")) or "-"
     public_result["message"] = sanitize_text(public_result.get("message"))
     return public_result
+
+
+def _sanitize_funding_precheck(precheck: dict[str, Any]) -> dict[str, Any]:
+    public_precheck = deepcopy(precheck)
+    accounts = public_precheck.get("accounts")
+    if isinstance(accounts, list):
+        public_precheck["accounts"] = [
+            {
+                "account_id": str(account.get("account_id") or ""),
+                "precheck_available_amount": account.get("precheck_available_amount", "-"),
+            }
+            for account in accounts
+            if isinstance(account, dict)
+        ]
+    return public_precheck
+
+
+def _sanitize_funding_reconciliation(reconciliation: dict[str, Any]) -> dict[str, Any]:
+    public_reconciliation = deepcopy(reconciliation)
+    results = public_reconciliation.get("results")
+    if isinstance(results, list):
+        public_reconciliation["results"] = [
+            {
+                "account_id": str(result.get("account_id") or ""),
+                "before_available_amount": result.get("before_available_amount", "-"),
+                "after_available_amount": result.get("after_available_amount", "-"),
+                "expected_direction": str(result.get("expected_direction") or ""),
+                "confirmed": bool(result.get("confirmed")),
+                "message": sanitize_text(result.get("message")),
+            }
+            for result in results
+            if isinstance(result, dict)
+        ]
+    return public_reconciliation

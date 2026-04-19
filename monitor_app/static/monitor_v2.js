@@ -26,6 +26,10 @@ const fundingQuickActions = document.getElementById('fundingQuickActions');
 const fundingQuickCollectButton = document.getElementById('fundingQuickCollectButton');
 const fundingQuickClearButton = document.getElementById('fundingQuickClearButton');
 const fundingSubmitButton = document.getElementById('fundingSubmitButton');
+const fundingOperationMeta = document.getElementById('fundingOperationMeta');
+const fundingOperationCopyButton = document.getElementById('fundingOperationCopyButton');
+const fundingLogTabRuntime = document.getElementById('fundingLogTabRuntime');
+const fundingLogTabAudit = document.getElementById('fundingLogTabAudit');
 const fundingLogLatestTime = document.getElementById('fundingLogLatestTime');
 const fundingLogList = document.getElementById('fundingLogList');
 
@@ -84,6 +88,13 @@ let fundingSyncAmountEnabled = false;
 let fundingLogEntries = [];
 let fundingLogCounter = 0;
 let fundingLastCapabilitySignature = '';
+let fundingAuditEntries = [];
+let fundingAuditDetailsByOperationId = {};
+let fundingAuditBusy = false;
+let fundingActiveLogTab = 'runtime';
+let fundingPendingOperationId = '';
+let fundingAuditSelectedOperationId = '';
+let fundingAuditFilter = '';
 
 let toolbarStatsSignature = '';
 let summarySignature = '';
@@ -170,6 +181,16 @@ const fmtClock = (value = new Date()) => {
   return Number.isNaN(date.getTime())
     ? '--:--:--'
     : date.toLocaleTimeString('zh-CN', { hour12: false });
+};
+const newOperationId = () => {
+  if (window.crypto?.randomUUID) {
+    return window.crypto.randomUUID();
+  }
+  return `op-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+};
+const shortOperationId = (value) => {
+  const text = String(value || '').trim();
+  return text ? text.slice(0, 8) : '-';
 };
 
 function applyActionButtonState() {
@@ -362,19 +383,239 @@ function fundingToneToLogLevel(tone = '') {
   return 'info';
 }
 
+function fundingOperationMetaText() {
+  if (fundingOverview && fundingOverview.write_enabled === false) {
+    return `写保护：${fundingOverview?.write_disabled_reason || '当前环境禁止真实划转'}`;
+  }
+  return `操作ID：${shortOperationId(fundingCurrentOperationId())}`;
+}
+
+function fundingOperationMetaFullText() {
+  return fundingCurrentOperationId();
+}
+
+function fundingCurrentOperationId() {
+  if (fundingActiveLogTab === 'audit') {
+    const selectedEntry = ensureFundingAuditSelection();
+    if (selectedEntry) {
+      const entryKey = fundingAuditEntryKey(selectedEntry);
+      const selectedDetail = getFundingAuditDetail(entryKey);
+      const selectedOperationId = String(selectedDetail?.operation_id || selectedEntry.operation_id || '').trim();
+      if (selectedOperationId) {
+        return selectedOperationId;
+      }
+    }
+  }
+  const text = String(fundingPendingOperationId || '').trim();
+  return text || '';
+}
+
+function fundingAuditStatusLabel(status = '') {
+  if (status === 'operation_fully_succeeded') return 'SUCCESS';
+  if (status === 'operation_partially_succeeded') return 'PARTIAL';
+  if (status === 'operation_submitted') return 'PENDING';
+  if (status === 'operation_failed') return 'FAILED';
+  return 'INFO';
+}
+
+function fundingAuditStatusLevel(status = '') {
+  if (status === 'operation_fully_succeeded') return 'success';
+  if (status === 'operation_partially_succeeded') return 'info';
+  if (status === 'operation_submitted') return 'info';
+  if (status === 'operation_failed') return 'error';
+  return 'info';
+}
+
+function fundingAuditFilteredEntries() {
+  const keyword = String(fundingAuditFilter || '').trim().toLowerCase();
+  if (!keyword) {
+    return fundingAuditEntries;
+  }
+  return fundingAuditEntries.filter((entry) =>
+    String(entry.operation_id || '').toLowerCase().startsWith(keyword)
+    || String(entry.asset || '').toLowerCase().includes(keyword)
+    || String(entry.message || '').toLowerCase().includes(keyword));
+}
+
+function fundingAuditEntryKey(entryOrDirection, operationId = '') {
+  if (entryOrDirection && typeof entryOrDirection === 'object') {
+    return `${String(entryOrDirection.direction || '').trim().toLowerCase()}::${String(entryOrDirection.operation_id || '').trim()}`;
+  }
+  return `${String(entryOrDirection || '').trim().toLowerCase()}::${String(operationId || '').trim()}`;
+}
+
+function parseFundingAuditEntryKey(entryKey) {
+  const normalized = String(entryKey || '');
+  const separatorIndex = normalized.indexOf('::');
+  if (separatorIndex < 0) {
+    return { direction: '', operationId: normalized };
+  }
+  return {
+    direction: normalized.slice(0, separatorIndex),
+    operationId: normalized.slice(separatorIndex + 2),
+  };
+}
+
+function getFundingAuditDetail(entryKey) {
+  return fundingAuditDetailsByOperationId[String(entryKey || '')] || null;
+}
+
+function ensureFundingAuditSelection() {
+  const filteredEntries = fundingAuditFilteredEntries();
+  if (!filteredEntries.length) {
+    fundingAuditSelectedOperationId = '';
+    return null;
+  }
+  const current = String(fundingAuditSelectedOperationId || '');
+  const selected = filteredEntries.find((entry) => fundingAuditEntryKey(entry) === current) || filteredEntries[0];
+  fundingAuditSelectedOperationId = fundingAuditEntryKey(selected);
+  return selected;
+}
+
+function formatFundingAuditDetail(detail) {
+  if (!detail) {
+    return '<div class="funding-log-empty">请选择一条审计记录</div>';
+  }
+  const summary = detail.operation_summary || {};
+  const reconciliation = detail.reconciliation || {};
+  const precheck = detail.precheck || {};
+  const results = Array.isArray(detail.results) ? detail.results : [];
+  const unconfirmed = Array.isArray(summary.unconfirmed_account_ids) ? summary.unconfirmed_account_ids : [];
+  const resultMarkup = results.length
+    ? results.map((result) => `
+        <div class="funding-audit-result">
+          <div class="funding-audit-result-head">
+            <strong>${escapeHtml(result.name || result.account_id || '-')}</strong>
+            <div class="funding-log-badge is-${escapeHtml(result.success ? 'success' : result.transfer_attempted ? 'error' : 'info')}">
+              ${escapeHtml(result.success ? 'SUCCESS' : result.transfer_attempted ? 'FAILED' : 'SKIPPED')}
+            </div>
+          </div>
+          <div class="funding-audit-result-meta mono">
+            <div>${escapeHtml(result.account_id || '-')} | UID ${escapeHtml(maskUid(result.uid || '-'))}</div>
+            <div>请求 ${escapeHtml(result.requested_amount || '-')} / 执行 ${escapeHtml(result.executed_amount || '-')}</div>
+            <div>预校验可用 ${escapeHtml(result.precheck_available_amount || '-')}</div>
+          </div>
+          <div>${escapeHtml(result.message || '-')}</div>
+        </div>
+      `).join('')
+    : '<div class="funding-log-empty">暂无可展示的执行明细</div>';
+
+  return `
+    <div class="funding-audit-detail-head">
+      <div class="funding-audit-detail-title">
+        <strong>${escapeHtml(detail.direction === 'collect' ? '子账号归集' : '主账号分发')}</strong>
+        <div class="mono">操作ID ${escapeHtml(shortOperationId(detail.operation_id || '-'))}</div>
+      </div>
+      <div class="funding-log-badge is-${escapeHtml(fundingAuditStatusLevel(detail.operation_status || ''))}">
+        ${escapeHtml(fundingAuditStatusLabel(detail.operation_status || ''))}
+      </div>
+    </div>
+    <div class="funding-audit-detail-grid">
+      <div class="funding-audit-detail-card">
+        <span>资产</span>
+        <strong>${escapeHtml(summary.asset || detail.asset || '-')}</strong>
+      </div>
+      <div class="funding-audit-detail-card">
+        <span>执行阶段</span>
+        <strong>${escapeHtml(detail.execution_stage || '-')}</strong>
+      </div>
+      <div class="funding-audit-detail-card">
+        <span>请求总额</span>
+        <strong>${escapeHtml(summary.requested_total_amount || precheck.requested_total_amount || '0')}</strong>
+      </div>
+      <div class="funding-audit-detail-card">
+        <span>到账确认</span>
+        <strong>${escapeHtml(reconciliation.status || '-')}</strong>
+      </div>
+    </div>
+    <div class="funding-audit-section">
+      <h4>摘要</h4>
+      <div class="funding-audit-result">
+        <div class="funding-audit-result-meta">
+          <div>预校验账号 ${escapeHtml(String(precheck.validated_account_count ?? 0))} 个</div>
+          <div>尝试 ${escapeHtml(String(summary.attempted_count ?? 0))} / 成功 ${escapeHtml(String(summary.success_count ?? 0))} / 失败 ${escapeHtml(String(summary.failure_count ?? 0))}</div>
+          <div>确认 ${escapeHtml(String(summary.confirmed_count ?? 0))} / 待确认 ${escapeHtml(String(summary.pending_confirmation_count ?? 0))}</div>
+          <div>主账号变动方向 ${escapeHtml(summary.expected_main_direction || '-')}</div>
+          <div>主账号前后可用 ${escapeHtml(summary.main_before_available_amount || '-')} -> ${escapeHtml(summary.main_after_available_amount || '-')}</div>
+        </div>
+        <div>${escapeHtml(detail.message || '操作已记录')}</div>
+        ${unconfirmed.length ? `<div class="mono">待确认账号：${escapeHtml(unconfirmed.join(', '))}</div>` : ''}
+      </div>
+    </div>
+    <div class="funding-audit-section">
+      <h4>执行明细</h4>
+      <div class="funding-audit-section-list">${resultMarkup}</div>
+    </div>
+  `;
+}
+
+function renderFundingAuditPanel() {
+  const filteredEntries = fundingAuditFilteredEntries();
+  const selectedEntry = ensureFundingAuditSelection();
+  const selectedDetail = selectedEntry ? getFundingAuditDetail(fundingAuditEntryKey(selectedEntry)) : null;
+  fundingLogLatestTime.textContent = filteredEntries[0]?.time || '--:--:--';
+  fundingLogList.innerHTML = `
+    <div class="funding-audit-shell">
+      <div class="funding-audit-toolbar">
+        <input
+          class="funding-audit-filter"
+          type="search"
+          data-funding-audit-filter
+          placeholder="按操作ID或资产筛选"
+          value="${escapeHtml(fundingAuditFilter)}"
+        >
+      </div>
+      <div class="funding-audit-body">
+        <div class="funding-audit-list">
+          ${filteredEntries.length ? filteredEntries.map((entry) => `
+            <button
+              class="funding-audit-item ${fundingAuditEntryKey(entry) === String(fundingAuditSelectedOperationId || '') ? 'is-selected' : ''}"
+              type="button"
+              data-funding-audit-select="${escapeHtml(fundingAuditEntryKey(entry))}"
+            >
+              <div class="funding-audit-item-head mono">
+                <span>${escapeHtml(entry.time || '--:--:--')}</span>
+                <span>${escapeHtml(shortOperationId(entry.operation_id || '-'))}</span>
+              </div>
+              <div class="funding-audit-item-main">
+                <div class="funding-log-badge is-${escapeHtml(fundingAuditStatusLevel(entry.operation_status || ''))}">
+                  ${escapeHtml(fundingAuditStatusLabel(entry.operation_status || ''))}
+                </div>
+                <span>${escapeHtml(entry.asset || '-')}</span>
+                <span class="mono">${escapeHtml(entry.execution_stage || '-')}</span>
+              </div>
+              <div class="funding-audit-item-message">${escapeHtml(entry.message || '操作已记录')}</div>
+            </button>
+          `).join('') : '<div class="funding-log-empty">暂无审计记录</div>'}
+        </div>
+        <div class="funding-audit-detail">${formatFundingAuditDetail(selectedDetail)}</div>
+      </div>
+    </div>
+  `;
+}
+
 function renderFundingLogPanel() {
-  if (!fundingLogList || !fundingLogLatestTime) {
+  if (!fundingLogList || !fundingLogLatestTime || !fundingLogTabRuntime || !fundingLogTabAudit) {
     return;
   }
 
-  if (!fundingLogEntries.length) {
+  fundingLogTabRuntime.classList.toggle('is-active', fundingActiveLogTab === 'runtime');
+  fundingLogTabAudit.classList.toggle('is-active', fundingActiveLogTab === 'audit');
+
+  if (fundingActiveLogTab === 'audit') {
+    renderFundingAuditPanel();
+    return;
+  }
+
+  const entries = fundingLogEntries;
+  if (!entries.length) {
     fundingLogLatestTime.textContent = '--:--:--';
     fundingLogList.innerHTML = '<div class="funding-log-empty">暂无日志</div>';
     return;
   }
 
-  fundingLogLatestTime.textContent = fundingLogEntries[0].time;
-  fundingLogList.innerHTML = fundingLogEntries.map((entry) => `
+  fundingLogLatestTime.textContent = entries[0].time || '--:--:--';
+  fundingLogList.innerHTML = entries.map((entry) => `
     <div class="funding-log-entry">
       <div class="funding-log-time mono">${escapeHtml(entry.time)}</div>
       <div class="funding-log-badge is-${escapeHtml(entry.level)}">${escapeHtml(fundingLogLevelLabel(entry.level))}</div>
@@ -399,6 +640,149 @@ function appendFundingLog(message, level = 'info') {
     fundingLogEntries = fundingLogEntries.slice(0, 300);
   }
   renderFundingLogPanel();
+}
+
+function setFundingAuditEntries(entries = []) {
+  fundingAuditEntries = entries
+    .filter((entry) => entry && typeof entry === 'object')
+    .map((entry) => ({
+      created_at: entry.created_at || '',
+      updated_at: entry.updated_at || '',
+      time: fmtClock(entry.updated_at || entry.created_at || new Date()),
+      message: String(entry.message || '').trim(),
+      operation_status: String(entry.operation_status || ''),
+      operation_id: String(entry.operation_id || ''),
+      direction: String(entry.direction || '').trim().toLowerCase(),
+      asset: String(entry.asset || ''),
+      execution_stage: String(entry.execution_stage || ''),
+      account_count: Number(entry.account_count || 0),
+      success_count: Number(entry.success_count || 0),
+      failure_count: Number(entry.failure_count || 0),
+      confirmed_count: Number(entry.confirmed_count || 0),
+      pending_confirmation_count: Number(entry.pending_confirmation_count || 0),
+    }));
+  const entryKeys = new Set(fundingAuditEntries.map((entry) => fundingAuditEntryKey(entry)));
+  Object.keys(fundingAuditDetailsByOperationId).forEach((entryKey) => {
+    if (!entryKeys.has(entryKey)) {
+      delete fundingAuditDetailsByOperationId[entryKey];
+    }
+  });
+  ensureFundingAuditSelection();
+  renderFundingLogPanel();
+}
+
+function setFundingAuditDetail(detail) {
+  if (!detail || typeof detail !== 'object') {
+    return;
+  }
+  const operationId = String(detail.operation_id || '').trim();
+  const direction = String(detail.direction || '').trim().toLowerCase();
+  if (!operationId || !direction) {
+    return;
+  }
+  const entryKey = fundingAuditEntryKey(direction, operationId);
+  fundingAuditDetailsByOperationId[entryKey] = detail;
+  if (!fundingAuditSelectedOperationId) {
+    fundingAuditSelectedOperationId = entryKey;
+  }
+  renderFundingLogPanel();
+}
+
+async function loadFundingAuditDetail(mainAccountId, operationId, direction = '', { preserveOnError = true } = {}) {
+  const normalizedOperationId = String(operationId || '').trim();
+  const normalizedDirection = String(direction || '').trim().toLowerCase();
+  const entryKey = fundingAuditEntryKey(normalizedDirection, normalizedOperationId);
+  if (!mainAccountId || !normalizedOperationId || !normalizedDirection) {
+    return { success: false, error: '暂无可加载的审计详情' };
+  }
+  try {
+    const query = new URLSearchParams({ direction: normalizedDirection }).toString();
+    const response = await fetch(
+      `/api/funding/groups/${encodeURIComponent(mainAccountId)}/audit/${encodeURIComponent(normalizedOperationId)}?${query}`,
+      { cache: 'no-store' },
+    );
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.detail || payload?.error?.message || `HTTP ${response.status}`);
+    }
+    setFundingAuditDetail(payload);
+    return { success: true, error: '' };
+  } catch (error) {
+    if (!preserveOnError) {
+      delete fundingAuditDetailsByOperationId[entryKey];
+      renderFundingLogPanel();
+    }
+    appendFundingLog(`审计详情加载失败：${error}`, 'error');
+    return { success: false, error: String(error) };
+  }
+}
+
+async function loadFundingAudit(mainAccountId, { preserveOnError = true } = {}) {
+  if (!mainAccountId) {
+    fundingAuditEntries = [];
+    fundingAuditDetailsByOperationId = {};
+    fundingAuditSelectedOperationId = '';
+    renderFundingLogPanel();
+    return { success: false, error: '暂无分组' };
+  }
+
+  fundingAuditBusy = true;
+  applyActionButtonState();
+  try {
+    const response = await fetch(`/api/funding/groups/${encodeURIComponent(mainAccountId)}/audit`, { cache: 'no-store' });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.detail || `HTTP ${response.status}`);
+    }
+    setFundingAuditEntries(Array.isArray(payload.entries) ? payload.entries : []);
+    const selectedEntry = ensureFundingAuditSelection();
+    if (selectedEntry) {
+      await loadFundingAuditDetail(mainAccountId, selectedEntry.operation_id, selectedEntry.direction, { preserveOnError: true });
+    }
+    return { success: true, error: '' };
+  } catch (error) {
+    if (!preserveOnError) {
+      setFundingAuditEntries([]);
+    }
+    appendFundingLog(`审计日志加载失败：${error}`, 'error');
+    return { success: false, error: String(error) };
+  } finally {
+    fundingAuditBusy = false;
+    applyActionButtonState();
+  }
+}
+
+async function ensureFundingAuditDetailLoaded(mainAccountId, { preserveOnError = true } = {}) {
+  const selectedEntry = ensureFundingAuditSelection();
+  if (!selectedEntry) {
+    renderFundingLogPanel();
+    renderFundingOperationMeta();
+    return { success: false, error: '暂无审计记录' };
+  }
+  const entryKey = fundingAuditEntryKey(selectedEntry);
+  if (getFundingAuditDetail(entryKey)) {
+    renderFundingLogPanel();
+    renderFundingOperationMeta();
+    return { success: true, error: '' };
+  }
+  const result = await loadFundingAuditDetail(
+    mainAccountId,
+    selectedEntry.operation_id,
+    selectedEntry.direction,
+    { preserveOnError },
+  );
+  renderFundingOperationMeta();
+  return result;
+}
+
+function renderFundingOperationMeta() {
+  if (!fundingOperationMeta) {
+    return;
+  }
+  fundingOperationMeta.textContent = fundingOperationMetaText();
+  if (fundingOperationCopyButton instanceof HTMLButtonElement) {
+    fundingOperationCopyButton.disabled = !fundingOperationMetaFullText();
+  }
 }
 
 function fundingAvailableMap(row) {
@@ -652,6 +1036,7 @@ function renderFundingModal() {
     syncFundingSelectAllState();
     fundingSubmitButton.textContent = fundingDirection === 'distribute' ? '执行分发' : '执行归集';
     fundingSubmitButton.disabled = true;
+    renderFundingOperationMeta();
     renderFundingLogPanel();
     return;
   }
@@ -674,6 +1059,7 @@ function renderFundingModal() {
   fundingModeDistribute.classList.toggle('is-active', fundingDirection === 'distribute');
   fundingModeCollect.classList.toggle('is-active', fundingDirection === 'collect');
   const modeAvailable = fundingModeAvailable();
+  const writeEnabled = fundingOverview?.write_enabled !== false;
   renderFundingMainSummary();
   renderFundingRows();
   if (fundingQuickActions) {
@@ -687,7 +1073,8 @@ function renderFundingModal() {
     fundingQuickClearButton.disabled = fundingModalBusy || fundingDirection !== 'collect';
   }
   fundingSubmitButton.textContent = fundingDirection === 'distribute' ? '执行分发' : '执行归集';
-  fundingSubmitButton.disabled = fundingModalBusy || !modeAvailable || !fundingSelectedAsset;
+  fundingSubmitButton.disabled = fundingModalBusy || !modeAvailable || !fundingSelectedAsset || !writeEnabled;
+  renderFundingOperationMeta();
   renderFundingLogPanel();
   syncFundingCapabilityLog();
 }
@@ -711,7 +1098,10 @@ async function loadFundingOverview(mainAccountId, { resetState = false, preserve
     fundingOverview = payload;
     if (resetState) {
       resetFundingSelectionState();
+      fundingAuditFilter = '';
+      fundingAuditSelectedOperationId = '';
     }
+    await loadFundingAudit(mainAccountId, { preserveOnError: true });
     return { success: true, error: '' };
   } catch (error) {
     if (!preserveOverviewOnError || !previousOverview) {
@@ -720,6 +1110,8 @@ async function loadFundingOverview(mainAccountId, { resetState = false, preserve
         main_account_name: mainAccountId,
         available: false,
         reason: String(error),
+        write_enabled: false,
+        write_disabled_reason: String(error),
         assets: [],
         main_account: { uid: '', transfer_ready: false, reason: String(error), spot_assets: [], spot_available: {}, funding_assets: [], funding_available: {} },
         children: [],
@@ -745,6 +1137,7 @@ function openFundingModal() {
   fundingSelectedGroupId = fundingSelectedGroupId || groups[0].id;
   fundingSelectedAsset = '';
   fundingDirection = 'distribute';
+  fundingActiveLogTab = 'runtime';
   resetFundingSyncAmountState();
   fundingModalShell.classList.remove('hidden');
   document.body.style.overflow = 'hidden';
@@ -808,6 +1201,39 @@ async function refreshFundingOverviewNow({ useCooldown = false, allowWhileBusy =
   return result;
 }
 
+function parseFundingFailurePayload(payload = {}, response = null, fallbackOperationId = '') {
+  const operationId = String(
+    response?.headers?.get?.('X-Funding-Operation-Id')
+    || payload?.error?.operation_id
+    || payload?.operation_id
+    || fallbackOperationId
+    || '',
+  ).trim();
+  return {
+    operationId,
+    detail: String(payload?.detail || payload?.error?.message || '资金操作失败'),
+    code: String(payload?.error?.code || 'PRECHECK_UNAVAILABLE'),
+  };
+}
+
+async function copyFundingOperationId() {
+  const operationId = fundingOperationMetaFullText();
+  if (!operationId) {
+    appendFundingLog('当前没有可复制的操作ID。', 'error');
+    return;
+  }
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(operationId);
+    } else {
+      throw new Error('clipboard unavailable');
+    }
+    appendFundingLog(`已复制操作ID：${shortOperationId(operationId)}`, 'success');
+  } catch (error) {
+    appendFundingLog(`复制操作ID失败：${error}`, 'error');
+  }
+}
+
 async function submitFundingOperation() {
   if (fundingModalBusy || !fundingOverview || !fundingSelectedGroupId) {
     return;
@@ -827,6 +1253,10 @@ async function submitFundingOperation() {
     appendFundingLog('请至少勾选一个子账号并填写大于 0 的归集金额。', 'error');
     return;
   }
+  if (fundingOverview.write_enabled === false) {
+    appendFundingLog(fundingOverview.write_disabled_reason || '当前环境禁止真实划转。', 'error');
+    return;
+  }
   for (const row of selectedRows) {
     const amount = Number(row.amount);
     if (!Number.isFinite(amount) || amount < 0) {
@@ -843,16 +1273,22 @@ async function submitFundingOperation() {
     }
   }
 
+  const operationId = newOperationId();
+  fundingPendingOperationId = operationId;
   fundingModalBusy = true;
   applyActionButtonState();
-  appendFundingLog(fundingDirection === 'distribute' ? '正在执行现货分发…' : '正在执行现货归集…', 'info');
+  renderFundingOperationMeta();
+  appendFundingLog(
+    `${fundingDirection === 'distribute' ? '正在执行现货分发' : '正在执行现货归集'}… 操作ID ${shortOperationId(operationId)}`,
+    'info',
+  );
   try {
     const endpoint = fundingDirection === 'distribute'
       ? `/api/funding/groups/${encodeURIComponent(fundingSelectedGroupId)}/distribute`
       : `/api/funding/groups/${encodeURIComponent(fundingSelectedGroupId)}/collect`;
     const requestBody = fundingDirection === 'distribute'
-      ? { asset: fundingSelectedAsset, transfers: selectedRows }
-      : { asset: fundingSelectedAsset, transfers: selectedRows };
+      ? { asset: fundingSelectedAsset, operation_id: operationId, transfers: selectedRows }
+      : { asset: fundingSelectedAsset, operation_id: operationId, transfers: selectedRows };
 
     const response = await fetch(endpoint, {
       method: 'POST',
@@ -861,28 +1297,47 @@ async function submitFundingOperation() {
     });
     const payload = await response.json();
     if (!response.ok) {
-      throw new Error(payload.detail || `HTTP ${response.status}`);
+      const failure = parseFundingFailurePayload(payload, response, operationId);
+      fundingPendingOperationId = failure.operationId || operationId;
+      throw new Error(`${failure.code}：${failure.detail}`);
     }
 
+    fundingPendingOperationId = String(response.headers.get('X-Funding-Operation-Id') || payload.operation_id || operationId);
     fundingOverview = payload.overview || fundingOverview;
     resetFundingSelectionState();
     renderFundingModal();
+    if (payload.idempotent_hit) {
+      appendFundingLog(`命中幂等返回：${shortOperationId(fundingPendingOperationId)}，当前仍按既有结果展示。`, 'info');
+    }
     const allSucceeded = Array.isArray(payload.results) && payload.results.every((row) => row.success);
     const baseMessage = payload.message || '操作完成';
-    appendFundingLog(baseMessage, allSucceeded ? 'success' : 'error');
-
-    await refreshFundingOverviewNow({ useCooldown: false, allowWhileBusy: true });
+    appendFundingLog(`${baseMessage} | 操作ID ${shortOperationId(fundingPendingOperationId)}`, allSucceeded ? 'success' : 'error');
+    if (payload.overview_refresh?.success === false) {
+      appendFundingLog(`资金概览刷新未确认：${payload.overview_refresh.message || '请稍后手动刷新'} | 操作ID ${shortOperationId(fundingPendingOperationId)}`, 'error');
+    }
+    if (payload.reconciliation?.status) {
+      const reconciliationLabel = payload.reconciliation.status === 'confirmed'
+        ? '到账确认成功'
+        : payload.reconciliation.status === 'partially_confirmed'
+          ? '到账确认部分成功'
+          : '到账确认未完成';
+      appendFundingLog(`${reconciliationLabel}，操作ID ${shortOperationId(fundingPendingOperationId)}`, payload.reconciliation.status === 'confirmed' ? 'success' : 'info');
+    }
+    await loadFundingAudit(fundingSelectedGroupId, { preserveOnError: true });
 
     const monitorRefreshResult = await refreshMonitorAfterFundingOperation();
     appendFundingLog(
-      monitorRefreshResult.success ? '主界面监控信息刷新成功。' : `主界面监控信息刷新失败：${monitorRefreshResult.error}`,
+      monitorRefreshResult.success
+        ? `主界面监控信息刷新成功。操作ID ${shortOperationId(fundingPendingOperationId)}`
+        : `主界面监控信息刷新失败：${monitorRefreshResult.error} | 操作ID ${shortOperationId(fundingPendingOperationId)}`,
       monitorRefreshResult.success ? 'success' : 'error',
     );
   } catch (error) {
-    appendFundingLog(`资金操作失败：${error}`, 'error');
+    appendFundingLog(`资金操作失败：${error} | 操作ID ${shortOperationId(fundingPendingOperationId || operationId)}`, 'error');
   } finally {
     fundingModalBusy = false;
     applyActionButtonState();
+    renderFundingOperationMeta();
     renderFundingModal();
   }
 }
@@ -949,8 +1404,29 @@ function assetSpotBalance(row) {
   return Math.abs(spotBalance) < 1e-9 ? 0 : spotBalance;
 }
 
+function distributionDisplayAmount(summary = {}, profitSummary = null, accounts = []) {
+  const cumulativeAmount = profitSummary?.all?.amount;
+  if (cumulativeAmount !== undefined && cumulativeAmount !== null && String(cumulativeAmount).trim() !== '') {
+    return cumulativeAmount;
+  }
+  if (Array.isArray(accounts) && accounts.length) {
+    const cumulativeTotal = accounts.reduce((total, account) => {
+      const accountAmount = Number(account?.distribution_profit_summary?.all?.amount ?? 0);
+      if (!Number.isFinite(accountAmount)) {
+        return total;
+      }
+      return total + accountAmount;
+    }, 0);
+    if (Math.abs(cumulativeTotal) >= 1e-9) {
+      return cumulativeTotal;
+    }
+  }
+  return summary?.total_distribution ?? 0;
+}
+
 function renderAccount(account) {
   const totals = account.totals || {};
+  const distributionAmount = distributionDisplayAmount(totals, account.distribution_profit_summary);
   return `
     <article class="account">
       <div class="account-head">
@@ -966,7 +1442,7 @@ function renderAccount(account) {
           { label: '保证金', value: fmt(totals.margin), tone: '' },
           { label: '可用余额', value: fmt(totals.available_balance), tone: '' },
           { label: '未实现盈亏', value: fmt(totals.unrealized_pnl), tone: numberTone(totals.unrealized_pnl) },
-          { label: '分发收益', value: fmt(totals.total_distribution), tone: numberTone(totals.total_distribution) },
+          { label: '分发收益', value: fmt(distributionAmount), tone: numberTone(distributionAmount) },
           { label: '7日年化', value: fmtPercent(totals.distribution_apy_7d), tone: numberTone(totals.distribution_apy_7d) },
         ].map(({ label, value, tone }) => `
           <div class="metric"><div class="label">${label}</div><div class="value ${tone}">${value}</div></div>
@@ -1030,6 +1506,7 @@ function renderAccountListContent(group) {
 
 function renderGroup(group) {
   const summary = group.summary || {};
+  const distributionAmount = distributionDisplayAmount(summary, group.profit_summary, group.accounts);
   const mainAccountId = String(group.main_account_id || '');
   const expanded = isGroupExpanded(mainAccountId);
   return `
@@ -1047,7 +1524,7 @@ function renderGroup(group) {
           { label: '保证金', value: fmt(summary.margin), tone: '' },
           { label: '可用余额', value: fmt(summary.available_balance), tone: '' },
           { label: '未实现盈亏', value: fmt(summary.unrealized_pnl), tone: numberTone(summary.unrealized_pnl) },
-          { label: '分发收益', value: fmt(summary.total_distribution), tone: numberTone(summary.total_distribution) },
+          { label: '分发收益', value: fmt(distributionAmount), tone: numberTone(distributionAmount) },
           { label: '7日年化', value: fmtPercent(summary.distribution_apy_7d), tone: numberTone(summary.distribution_apy_7d) },
         ].map(({ label, value, tone }) => `
           <div class="metric"><div class="label">${label}</div><div class="value ${tone}">${value}</div></div>
@@ -1070,7 +1547,13 @@ function groupRenderSignature(group) {
   const mainAccountId = String(group.main_account_id || '');
   const expanded = isGroupExpanded(mainAccountId);
   if (!expanded) {
-    return JSON.stringify({ expanded: false, main_account_id: mainAccountId, main_account_name: group.main_account_name || '', summary: group.summary || {} });
+    return JSON.stringify({
+      expanded: false,
+      main_account_id: mainAccountId,
+      main_account_name: group.main_account_name || '',
+      summary: group.summary || {},
+      profit_summary: group.profit_summary || {},
+    });
   }
   return JSON.stringify({ expanded: true, selected_account_id: String(groupSelectedAccountState[mainAccountId] || ''), group });
 }
@@ -1279,6 +1762,13 @@ function resetMonitorV2TestState() {
   fundingLogEntries = [];
   fundingLogCounter = 0;
   fundingLastCapabilitySignature = '';
+  fundingAuditEntries = [];
+  fundingAuditDetailsByOperationId = {};
+  fundingAuditBusy = false;
+  fundingActiveLogTab = 'runtime';
+  fundingPendingOperationId = '';
+  fundingAuditSelectedOperationId = '';
+  fundingAuditFilter = '';
 
   toolbarStatsSignature = '';
   summarySignature = '';
@@ -1301,6 +1791,7 @@ function resetMonitorV2TestState() {
   if (updatedAt) updatedAt.textContent = '-';
 
   renderFundingLogPanel();
+  renderFundingOperationMeta();
   applyActionButtonState();
 }
 
@@ -1561,6 +2052,44 @@ async function bootstrap() {
   fundingQuickCollectButton.addEventListener('click', applyFundingQuickCollectPreset);
   fundingQuickClearButton.addEventListener('click', applyFundingQuickClearPreset);
   fundingSubmitButton.addEventListener('click', submitFundingOperation);
+  fundingOperationCopyButton?.addEventListener('click', copyFundingOperationId);
+  fundingLogTabRuntime.addEventListener('click', () => {
+    fundingActiveLogTab = 'runtime';
+    renderFundingLogPanel();
+  });
+  fundingLogTabAudit.addEventListener('click', async () => {
+    fundingActiveLogTab = 'audit';
+    renderFundingLogPanel();
+    await ensureFundingAuditDetailLoaded(fundingSelectedGroupId, { preserveOnError: true });
+  });
+  fundingLogList.addEventListener('input', async (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    if (target.matches('[data-funding-audit-filter]')) {
+      fundingAuditFilter = target.value;
+      ensureFundingAuditSelection();
+      renderFundingLogPanel();
+      renderFundingOperationMeta();
+      if (fundingActiveLogTab === 'audit') {
+        await ensureFundingAuditDetailLoaded(fundingSelectedGroupId, { preserveOnError: true });
+      }
+    }
+  });
+  fundingLogList.addEventListener('click', async (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    const auditSelectButton = target.closest('[data-funding-audit-select]');
+    if (!(auditSelectButton instanceof HTMLElement)) return;
+    const entryKey = String(auditSelectButton.getAttribute('data-funding-audit-select') || '');
+    if (!entryKey) return;
+    fundingAuditSelectedOperationId = entryKey;
+    renderFundingLogPanel();
+    if (!getFundingAuditDetail(entryKey)) {
+      const { direction, operationId } = parseFundingAuditEntryKey(entryKey);
+      if (!direction || !operationId) return;
+      await loadFundingAuditDetail(fundingSelectedGroupId, operationId, direction, { preserveOnError: true });
+    }
+  });
 
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && !fundingModalShell.classList.contains('hidden')) closeFundingModal();
@@ -1614,6 +2143,7 @@ window.__monitorV2 = {
   bootstrap,
   refreshFundingOverviewNow,
   submitFundingOperation,
+  copyFundingOperationId,
   resetTestState: resetMonitorV2TestState,
   getFundingLogEntries: () => [...fundingLogEntries],
   setFundingOverview: (overview) => {
@@ -1633,6 +2163,26 @@ window.__monitorV2 = {
   },
   setFundingSelectionState: (selectionState) => {
     fundingSelectionState = selectionState || {};
+  },
+  setFundingActiveLogTab: (tab) => {
+    fundingActiveLogTab = tab === 'audit' ? 'audit' : 'runtime';
+    renderFundingLogPanel();
+  },
+  getFundingAuditEntries: () => [...fundingAuditEntries],
+  getFundingAuditDetail,
+  loadFundingAudit,
+  loadFundingAuditDetail,
+  setFundingAuditFilter: (value) => {
+    fundingAuditFilter = String(value || '');
+    renderFundingLogPanel();
+    renderFundingOperationMeta();
+    if (fundingActiveLogTab === 'audit') {
+      return ensureFundingAuditDetailLoaded(fundingSelectedGroupId, { preserveOnError: true });
+    }
+  },
+  setFundingPendingOperationId: (value) => {
+    fundingPendingOperationId = String(value || '');
+    renderFundingOperationMeta();
   },
 };
 

@@ -711,7 +711,7 @@ class BinanceMonitorGateway:
                     last_successful_end_time=query_end_time,
                     success_at_ms=query_end_time,
                 )
-                if oldest_event_time_ms >= earliest_event_time_ms:
+                if earliest_event_time_ms is not None and oldest_event_time_ms >= earliest_event_time_ms:
                     logger.info(
                         "Distribution backfill completed account_id=%s phase=duplicate_boundary_complete boundary=%s duration_ms=%s",
                         self._account.account_id,

@@ -75,6 +75,8 @@ function baseFundingOverview(overrides = {}) {
     main_account_name: 'Group A',
     available: true,
     reason: '',
+    write_enabled: true,
+    write_disabled_reason: '',
     assets: ['BNB'],
     main_account: {
       uid: '13133777',
@@ -106,6 +108,15 @@ function baseFundingOverview(overrides = {}) {
   };
 }
 
+function auditPayload(overrides = {}) {
+  return {
+    main_account_id: 'group_a',
+    entries: [],
+    updated_at: '2026-03-29T12:00:00+08:00',
+    ...overrides,
+  };
+}
+
 function createApp() {
   const dom = new JSDOM(readFileSync(htmlPath, 'utf8'), {
     url: 'http://127.0.0.1:8010/',
@@ -120,6 +131,9 @@ function createApp() {
   window.EventSource = class FakeEventSource {
     addEventListener() {}
     close() {}
+  };
+  window.navigator.clipboard = {
+    writeText: vi.fn(async () => {}),
   };
   if (!window.CSS) {
     window.CSS = { escape: (value) => String(value) };
@@ -203,13 +217,84 @@ describe('monitor_v2.js', () => {
     expect(text).toContain('2,450.55');
   });
 
+  it('renders cumulative distribution amounts in cards instead of 7-day rolling totals', () => {
+    const app = createApp();
+    apps.push(app);
+    app.api.resetTestState();
+
+    const account = baseAccount();
+    account.totals.total_distribution = '4.51899612';
+    account.distribution_profit_summary = {
+      all: {
+        amount: '16.12597054',
+      },
+    };
+
+    app.api.render(basePayload({
+      summary: {
+        account_count: 1,
+        success_count: 1,
+        error_count: 0,
+        equity: '100',
+        margin: '50',
+        available_balance: '40',
+        unrealized_pnl: '0',
+        total_commission: '0',
+        total_distribution: '22.59498060',
+        distribution_apy_7d: '0.0310956332',
+      },
+      profit_summary: {
+        all: {
+          amount: '80.62985270',
+        },
+      },
+      groups: [
+        {
+          main_account_id: 'group_a',
+          main_account_name: 'Group A',
+          summary: {
+            account_count: 1,
+            success_count: 1,
+            error_count: 0,
+            equity: '100',
+            margin: '50',
+            available_balance: '40',
+            unrealized_pnl: '0',
+            total_distribution: '22.59498060',
+            distribution_apy_7d: '0.0310956332',
+          },
+          profit_summary: {
+            all: {
+              amount: '16.12597054',
+            },
+          },
+          accounts: [account],
+        },
+      ],
+    }));
+
+    app.document.querySelector('.group-toggle-button')?.click();
+
+    const text = app.document.body.textContent;
+    expect(text).toContain('80.63');
+    expect(text).toContain('16.13');
+    expect(text).not.toContain('22.59');
+    expect(text).not.toContain('4.52');
+  });
+
   it('coalesces stream renders and only applies the latest payload', () => {
     const app = createApp();
     apps.push(app);
     app.api.resetTestState();
 
-    app.api.scheduleStreamRender(basePayload({ message: 'first', groups: [{ ...basePayload().groups[0], main_account_name: 'First Group' }] }));
-    app.api.scheduleStreamRender(basePayload({ message: 'second', groups: [{ ...basePayload().groups[0], main_account_name: 'Second Group' }] }));
+    app.api.scheduleStreamRender(basePayload({
+      message: 'first',
+      groups: [{ ...basePayload().groups[0], main_account_name: 'First Group' }],
+    }));
+    app.api.scheduleStreamRender(basePayload({
+      message: 'second',
+      groups: [{ ...basePayload().groups[0], main_account_name: 'Second Group' }],
+    }));
     app.flushAnimationFrames();
 
     expect(app.document.getElementById('messageText').textContent).toContain('second');
@@ -249,6 +334,23 @@ describe('monitor_v2.js', () => {
     expect(text).not.toContain('223456789');
   });
 
+  it('disables submit when write protection is enabled by backend', () => {
+    const app = createApp();
+    apps.push(app);
+    app.api.resetTestState();
+    app.api.setLatestPayload(basePayload());
+    app.api.setFundingOverview(baseFundingOverview({
+      write_enabled: false,
+      write_disabled_reason: '当前环境禁止真实划转',
+    }));
+    app.api.setFundingSelectedGroupId('group_a');
+    app.api.setFundingSelectedAsset('BNB');
+    app.api.renderFundingModal();
+
+    expect(app.document.getElementById('fundingSubmitButton').disabled).toBe(true);
+    expect(app.document.getElementById('fundingOperationMeta').textContent).toContain('写保护');
+  });
+
   it('refreshes funding overview and writes success and failure logs', async () => {
     const app = createApp();
     apps.push(app);
@@ -259,31 +361,42 @@ describe('monitor_v2.js', () => {
     app.api.renderFundingModal();
 
     app.window.fetch = vi.fn(async (url) => {
-      if (String(url).includes('/api/funding/groups/group_a')) {
+      const path = new URL(String(url), app.window.location.origin).pathname;
+      if (path === '/api/funding/groups/group_a') {
         return { ok: true, json: async () => baseFundingOverview() };
+      }
+      if (path === '/api/funding/groups/group_a/audit') {
+        return { ok: true, json: async () => auditPayload() };
       }
       throw new Error(`unexpected url: ${url}`);
     });
 
     const successResult = await app.api.refreshFundingOverviewNow({ useCooldown: false });
     expect(successResult.success).toBe(true);
-    expect(app.api.getFundingLogEntries()[0].message).toBe('当前分组资金信息刷新成功。');
-    expect(app.api.getFundingLogEntries()[1].message).toBe('正在刷新当前分组资金信息…');
+    expect(app.api.getFundingLogEntries().some((entry) => entry.message.includes('正在刷新当前分组资金信息'))).toBe(true);
+    expect(app.api.getFundingLogEntries().some((entry) => entry.message.includes('当前分组资金信息刷新成功'))).toBe(true);
 
-    app.window.fetch = vi.fn(async () => ({
-      ok: false,
-      json: async () => ({ detail: 'boom' }),
-    }));
+    app.window.fetch = vi.fn(async (url) => {
+      const path = new URL(String(url), app.window.location.origin).pathname;
+      if (path === '/api/funding/groups/group_a') {
+        return {
+          ok: false,
+          json: async () => ({ detail: 'boom' }),
+        };
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
 
     const failureResult = await app.api.refreshFundingOverviewNow({ useCooldown: false });
     expect(failureResult.success).toBe(false);
-    expect(app.api.getFundingLogEntries()[0].message).toContain('资金信息刷新失败：');
+    expect(app.api.getFundingLogEntries()[0].message).toContain('boom');
   });
 
-  it('submits a funding distribute action and appends operation logs', async () => {
+  it('submits a funding distribute action with operation_id and renders audit entries', async () => {
     const app = createApp();
     apps.push(app);
     app.api.resetTestState();
+    app.api.setLatestPayload(basePayload());
     app.api.setFundingOverview(baseFundingOverview());
     app.api.setFundingDirection('distribute');
     app.api.setFundingSelectedGroupId('group_a');
@@ -293,25 +406,113 @@ describe('monitor_v2.js', () => {
     });
     app.api.renderFundingModal();
 
+    const auditEntries = [
+      {
+        operation_id: 'funding-op-123',
+        direction: 'distribute',
+        operation_status: 'operation_fully_succeeded',
+        message: 'Distribute succeeded for 1 sub-accounts',
+        asset: 'BNB',
+        updated_at: '2026-03-29T12:00:00+08:00',
+      },
+    ];
+    let submittedOperationId = '';
+
     app.window.fetch = vi.fn(async (url, options = {}) => {
-      if (String(url).includes('/api/funding/groups/group_a/distribute')) {
+      const path = new URL(String(url), app.window.location.origin).pathname;
+      if (path === '/api/funding/groups/group_a/distribute') {
         expect(options.method).toBe('POST');
+        const requestBody = JSON.parse(options.body);
+        submittedOperationId = String(requestBody.operation_id || '');
+        expect(requestBody.asset).toBe('BNB');
+        expect(submittedOperationId.length).toBeGreaterThan(0);
+        expect(requestBody.transfers).toEqual([{ account_id: 'group_a.sub1', amount: '1.5' }]);
         return {
           ok: true,
           json: async () => ({
+            operation_id: submittedOperationId,
+            idempotent_hit: false,
+            operation_status: 'operation_fully_succeeded',
             message: 'Distribute succeeded for 1 sub-accounts',
-            results: [{ account_id: 'group_a.sub1', success: true, message: 'Distribute succeeded', amount: '1.5' }],
+            results: [{
+              account_id: 'group_a.sub1',
+              success: true,
+              message: 'Distribute succeeded',
+              requested_amount: '1.5',
+              executed_amount: '1.5',
+              transfer_attempted: true,
+            }],
+            precheck: {
+              asset: 'BNB',
+              requested_total_amount: '1.5',
+              validated_account_count: 1,
+              main_available_amount: '10',
+            },
             overview: baseFundingOverview(),
+            overview_refresh: { success: true, message: '' },
+            reconciliation: {
+              status: 'confirmed',
+              confirmed_count: 1,
+              failed_count: 0,
+              results: [],
+            },
           }),
         };
       }
-      if (String(url).includes('/api/funding/groups/group_a')) {
+      if (path === '/api/funding/groups/group_a/audit') {
         return {
           ok: true,
-          json: async () => baseFundingOverview(),
+          json: async () => auditPayload({ entries: auditEntries }),
         };
       }
-      if (String(url).includes('/api/monitor/refresh')) {
+      if (path === '/api/funding/groups/group_a/audit/funding-op-123') {
+        expect(new URL(String(url), app.window.location.origin).searchParams.get('direction')).toBe('distribute');
+        return {
+          ok: true,
+          json: async () => ({
+            operation_id: 'funding-op-123',
+            direction: 'distribute',
+            asset: 'BNB',
+            execution_stage: 'completed',
+            operation_status: 'operation_fully_succeeded',
+            message: 'Distribute succeeded for 1 sub-accounts',
+            operation_summary: {
+              asset: 'BNB',
+              requested_total_amount: '1.5',
+              attempted_count: 1,
+              success_count: 1,
+              failure_count: 0,
+              confirmed_count: 1,
+              pending_confirmation_count: 0,
+              main_before_available_amount: '10',
+              main_after_available_amount: '8.5',
+              expected_main_direction: 'decrease',
+              unconfirmed_account_ids: [],
+            },
+            precheck: {
+              asset: 'BNB',
+              requested_total_amount: '1.5',
+              validated_account_count: 1,
+              main_available_amount: '10',
+              accounts: [{ account_id: 'group_a.sub1', precheck_available_amount: '3.2' }],
+            },
+            overview_refresh: { success: true, message: '' },
+            reconciliation: { status: 'confirmed', confirmed_count: 1, failed_count: 0, results: [] },
+            results: [{
+              account_id: 'group_a.sub1',
+              name: 'Sub 1',
+              uid: '2234***89',
+              success: true,
+              requested_amount: '1.5',
+              executed_amount: '1.5',
+              precheck_available_amount: '3.2',
+              transfer_attempted: true,
+              message: 'Distribute succeeded',
+            }],
+          }),
+        };
+      }
+      if (path === '/api/monitor/refresh') {
         return {
           ok: true,
           json: async () => basePayload({ message: 'monitor refreshed' }),
@@ -323,9 +524,188 @@ describe('monitor_v2.js', () => {
     await app.api.submitFundingOperation();
 
     const messages = app.api.getFundingLogEntries().map((entry) => entry.message);
-    expect(messages).toContain('正在执行现货分发…');
-    expect(messages).toContain('Distribute succeeded for 1 sub-accounts');
-    expect(messages).toContain('当前分组资金信息刷新成功。');
-    expect(messages).toContain('主界面监控信息刷新成功。');
+    expect(messages.some((message) => message.includes('正在执行现货分发'))).toBe(true);
+    expect(app.document.getElementById('fundingOperationMeta').textContent).toContain(submittedOperationId.slice(0, 8));
+
+    await app.api.loadFundingAudit('group_a');
+    app.api.setFundingActiveLogTab('audit');
+    const auditText = app.document.getElementById('fundingLogList').textContent;
+    expect(auditText).toContain('Distribute succeeded for 1 sub-accounts');
+    expect(auditText).toContain('BNB');
+    expect(auditText).toContain('1.5');
+  });
+
+  it('renders audit summary/detail split, filters by operation_id, and copies operation id', async () => {
+    const app = createApp();
+    apps.push(app);
+    app.api.resetTestState();
+    app.api.setLatestPayload(basePayload());
+    app.api.setFundingOverview(baseFundingOverview());
+    app.api.setFundingSelectedGroupId('group_a');
+    app.api.setFundingSelectedAsset('BNB');
+    app.api.setFundingPendingOperationId('funding-op-xyz-1234');
+    app.api.renderFundingModal();
+
+    app.window.fetch = vi.fn(async (url) => {
+      const path = new URL(String(url), app.window.location.origin).pathname;
+      if (path === '/api/funding/groups/group_a/audit') {
+        return {
+          ok: true,
+          json: async () => auditPayload({
+            entries: [
+              {
+                operation_id: 'funding-op-xyz-1234',
+                direction: 'collect',
+                operation_status: 'operation_fully_succeeded',
+                execution_stage: 'completed',
+                message: 'Collect succeeded for 1 sub-accounts',
+                asset: 'BNB',
+                created_at: '2026-03-29T12:00:00+08:00',
+              },
+              {
+                operation_id: 'funding-op-older-0001',
+                direction: 'distribute',
+                operation_status: 'operation_submitted',
+                execution_stage: 'executing',
+                message: 'Collect submitted for 1 sub-accounts',
+                asset: 'BNB',
+                created_at: '2026-03-29T11:00:00+08:00',
+              },
+            ],
+          }),
+        };
+      }
+      if (path === '/api/funding/groups/group_a/audit/funding-op-xyz-1234') {
+        expect(new URL(String(url), app.window.location.origin).searchParams.get('direction')).toBe('collect');
+        return {
+          ok: true,
+          json: async () => ({
+            operation_id: 'funding-op-xyz-1234',
+            direction: 'collect',
+            asset: 'BNB',
+            execution_stage: 'completed',
+            operation_status: 'operation_fully_succeeded',
+            message: 'Collect succeeded for 1 sub-accounts',
+            operation_summary: {
+              asset: 'BNB',
+              requested_total_amount: '2',
+              attempted_count: 1,
+              success_count: 1,
+              failure_count: 0,
+              confirmed_count: 1,
+              pending_confirmation_count: 0,
+              main_before_available_amount: '10',
+              main_after_available_amount: '12',
+              expected_main_direction: 'increase',
+              unconfirmed_account_ids: [],
+            },
+            precheck: {
+              asset: 'BNB',
+              requested_total_amount: '2',
+              validated_account_count: 1,
+              main_available_amount: '10',
+              accounts: [{ account_id: 'group_a.sub1', precheck_available_amount: '2' }],
+            },
+            overview_refresh: { success: true, message: '' },
+            reconciliation: { status: 'confirmed', confirmed_count: 1, failed_count: 0, results: [] },
+            results: [{
+              account_id: 'group_a.sub1',
+              name: 'Sub 1',
+              uid: '2234***89',
+              success: true,
+              requested_amount: '2',
+              executed_amount: '2',
+              precheck_available_amount: '2',
+              transfer_attempted: true,
+              message: 'Collect succeeded',
+            }],
+          }),
+        };
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    await app.api.loadFundingAudit('group_a');
+    app.api.setFundingActiveLogTab('audit');
+    const list = app.document.getElementById('fundingLogList');
+    expect(list.textContent).toContain('Collect succeeded for 1 sub-accounts');
+    expect(list.textContent).toContain('completed');
+
+    await app.api.setFundingAuditFilter('funding-op-older');
+    expect(app.document.getElementById('fundingLogList').textContent).toContain('Collect submitted for 1 sub-accounts');
+    expect(app.document.getElementById('fundingLogList').textContent).not.toContain('Collect succeeded for 1 sub-accounts');
+
+    await app.api.copyFundingOperationId();
+    expect(app.window.navigator.clipboard.writeText).toHaveBeenCalledWith('funding-op-older-0001');
+  });
+
+  it('requests audit detail with direction when operation ids are reused across modes', async () => {
+    const app = createApp();
+    apps.push(app);
+    app.api.resetTestState();
+    app.api.setLatestPayload(basePayload());
+    app.api.setFundingOverview(baseFundingOverview());
+    app.api.setFundingSelectedGroupId('group_a');
+    app.api.setFundingSelectedAsset('BNB');
+    app.api.renderFundingModal();
+
+    const detailDirections = [];
+    app.window.fetch = vi.fn(async (url) => {
+      const parsed = new URL(String(url), app.window.location.origin);
+      const path = parsed.pathname;
+      if (path === '/api/funding/groups/group_a/audit') {
+        return {
+          ok: true,
+          json: async () => auditPayload({
+            entries: [
+              {
+                operation_id: 'shared-op',
+                direction: 'distribute',
+                operation_status: 'operation_fully_succeeded',
+                execution_stage: 'completed',
+                message: 'Distribute succeeded',
+                asset: 'BNB',
+                created_at: '2026-03-29T12:00:00+08:00',
+              },
+              {
+                operation_id: 'shared-op',
+                direction: 'collect',
+                operation_status: 'operation_fully_succeeded',
+                execution_stage: 'completed',
+                message: 'Collect succeeded',
+                asset: 'BNB',
+                created_at: '2026-03-29T11:00:00+08:00',
+              },
+            ],
+          }),
+        };
+      }
+      if (path === '/api/funding/groups/group_a/audit/shared-op') {
+        detailDirections.push(parsed.searchParams.get('direction'));
+        return {
+          ok: true,
+          json: async () => ({
+            operation_id: 'shared-op',
+            direction: parsed.searchParams.get('direction'),
+            execution_stage: 'completed',
+            operation_status: 'operation_fully_succeeded',
+            asset: 'BNB',
+            message: 'ok',
+            operation_summary: {},
+            precheck: {},
+            overview_refresh: { success: true, message: '' },
+            reconciliation: { status: 'confirmed', confirmed_count: 0, failed_count: 0, results: [] },
+            results: [],
+          }),
+        };
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    await app.api.loadFundingAudit('group_a');
+    await app.api.loadFundingAuditDetail('group_a', 'shared-op', 'collect');
+
+    expect(detailDirections).toContain('distribute');
+    expect(detailDirections).toContain('collect');
   });
 });

@@ -503,13 +503,15 @@ async def test_get_unified_account_snapshot_uses_cached_commission_when_income_r
         ),
     )
 
+    recent_event_time_ms = int(datetime.now(UTC).timestamp() * 1000) - 60_000
+
     await gateway._history_store.record_history_batch(
         "group_a.sub1",
         "income",
         [
             HistoryEvent(
                 source="income",
-                event_time_ms=1774404965000,
+                event_time_ms=recent_event_time_ms,
                 unique_key="cached-commission",
                 asset="USDT",
                 amount=Decimal("-1.25"),
@@ -517,7 +519,7 @@ async def test_get_unified_account_snapshot_uses_cached_commission_when_income_r
                 payload={},
             )
         ],
-        last_successful_end_time=1774404965000,
+        last_successful_end_time=recent_event_time_ms,
         retain_after_ms=0,
     )
 
@@ -540,7 +542,7 @@ async def test_get_unified_account_snapshot_uses_cached_commission_when_income_r
                     "incomeType": "COMMISSION",
                     "income": "-3.00",
                     "asset": "USDT",
-                    "time": 1774404966000,
+                    "time": recent_event_time_ms + 1_000,
                     "symbol": "BTCUSDT",
                 }
             ]
@@ -738,6 +740,54 @@ async def test_distribution_backfill_marks_complete_when_no_older_records_exist(
         await gateway.close()
 
     assert completed is True
+
+
+@pytest.mark.asyncio
+async def test_distribution_backfill_handles_first_window_when_no_existing_history(tmp_path: Path) -> None:
+    settings = Settings(_env_file=None, monitor_history_db_path=tmp_path / "history.db")
+    gateway = BinanceMonitorGateway(
+        settings,
+        MonitorAccountConfig(
+            account_id="group_a.sub1",
+            child_account_id="sub1",
+            child_account_name="Sub One",
+            main_account_id="group_a",
+            main_account_name="Group A",
+            api_key="k",
+            api_secret="s",
+        ),
+    )
+    calls = 0
+
+    async def fake_signed_request_sapi(path: str, params: dict | None = None, *, timeout_s: float | None = None):
+        nonlocal calls
+        calls += 1
+        assert path == "/sapi/v1/asset/assetDividend"
+        if calls == 1:
+            return {
+                "rows": [
+                    {
+                        "asset": "RWUSD",
+                        "amount": "0.5",
+                        "divTime": 1,
+                        "enInfo": "RWUSD rewards distribution",
+                    }
+                ]
+            }
+        if calls == 2:
+            return {"rows": []}
+        raise AssertionError("Distribution backfill should complete after the empty boundary window")
+
+    gateway._signed_request_sapi = fake_signed_request_sapi  # type: ignore[method-assign]
+    try:
+        await gateway._run_distribution_backfill(backfill_limit=100)
+        completed = await gateway._history_store.is_distribution_backfill_complete("group_a.sub1")
+        earliest_event_time_ms = await gateway._history_store.get_earliest_event_time_ms("group_a.sub1", "distribution")
+    finally:
+        await gateway.close()
+
+    assert completed is True
+    assert earliest_event_time_ms == 1
 
 
 @pytest.mark.asyncio

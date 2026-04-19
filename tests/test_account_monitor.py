@@ -119,6 +119,7 @@ async def test_account_monitor_controller_groups_and_filters_accounts(tmp_path: 
     assert refreshed["data"]["summary"]["equity"] == "2400"
     assert refreshed["data"]["summary"]["total_commission"] == "-3.6"
     assert refreshed["data"]["summary"]["total_distribution"] == "3.0"
+    assert refreshed["data"]["groups"][0]["profit_summary"]["all"]["amount"] == "3.0"
     assert Decimal(refreshed["data"]["summary"]["distribution_apy_7d"]).quantize(Decimal("0.00000001")) == Decimal("0.06517857")
     assert refreshed["data"]["profit_summary"]["today"]["amount"] == "0.4"
     assert refreshed["data"]["profit_summary"]["all"]["complete"] is True
