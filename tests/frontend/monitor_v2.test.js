@@ -798,4 +798,32 @@ describe('monitor_v2.js', () => {
     expect(message).toContain('已更新 1 项敏感配置');
     expect(message).not.toContain('已覆盖 0 个分组 / 0 个账户');
   });
+
+  it('surfaces plain-text import errors instead of JSON syntax failures', async () => {
+    const app = createApp();
+    apps.push(app);
+    app.api.resetTestState();
+
+    app.window.fetch = vi.fn(async (url) => {
+      const path = new URL(String(url), app.window.location.origin).pathname;
+      if (path === '/api/config/import/excel') {
+        return {
+          ok: false,
+          status: 500,
+          headers: { get: () => 'text/plain; charset=utf-8' },
+          text: async () => 'Internal Server Error',
+        };
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    await app.api.uploadExcel(
+      new app.window.File(['xlsx'], 'accounts.xlsx', {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      }),
+    );
+
+    expect(app.document.getElementById('messageText').textContent).toContain('Internal Server Error');
+    expect(app.document.getElementById('messageText').textContent).not.toContain('Unexpected token');
+  });
 });

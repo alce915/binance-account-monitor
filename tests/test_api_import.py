@@ -669,6 +669,7 @@ def test_import_excel_endpoint_rolls_back_runtime_state_after_reload_failure(mon
             asyncio.run(controller.close())
 
     assert response.status_code == 500
+    assert response.json()["detail"] == "reload failed after state change"
     persisted = json.loads(settings.monitor_accounts_file.read_text(encoding="utf-8"))
     assert persisted == existing_payload
     assert sorted(settings.monitor_accounts) == ["existing.sub1"]
@@ -733,6 +734,7 @@ def test_import_excel_endpoint_rolls_back_runtime_telegram_settings_after_reload
             asyncio.run(controller.close())
 
     assert response.status_code == 500
+    assert response.json()["detail"] == "reload failed after state change"
     assert controller._telegram_notifications.enabled is True
     assert controller._telegram_notifications._bot_token == "process-bot-token"
     assert controller._telegram_notifications._chat_id == "process-chat-id"

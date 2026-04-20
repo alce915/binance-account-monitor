@@ -514,6 +514,13 @@ async def import_monitor_accounts_excel(request: Request, file: UploadFile = Fil
         raise HTTPException(status_code=400, detail=sanitize_error_summary(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=sanitize_error_summary(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=sanitize_error_summary(exc, fallback="Internal Server Error"),
+        ) from exc
     finally:
         await file.close()
 

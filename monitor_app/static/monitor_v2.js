@@ -257,6 +257,27 @@ async function apiFetch(url, options = {}) {
   return response;
 }
 
+async function readApiPayload(response) {
+  if (!response) return {};
+  if (typeof response.text !== 'function') {
+    if (typeof response.json === 'function') {
+      try {
+        return await response.json();
+      } catch {
+        return {};
+      }
+    }
+    return {};
+  }
+  const text = await response.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { detail: text };
+  }
+}
+
 async function loadAuthSession() {
   const response = await fetch('/api/auth/session', { cache: 'no-store' });
   const payload = await response.json();
@@ -2022,7 +2043,7 @@ async function uploadExcel(file) {
     const formData = new FormData();
     formData.append('file', file);
     const response = await apiFetch('/api/config/import/excel', { method: 'POST', body: formData });
-    const payload = await response.json();
+    const payload = await readApiPayload(response);
     if (!response.ok) throw new Error(payload.detail || payload.message || `HTTP ${response.status}`);
     render(payload);
     messageText.textContent = describeImportResult(payload);
@@ -2310,6 +2331,7 @@ window.__monitorV2 = {
   getFundingAuditDetail,
   loadFundingAudit,
   loadFundingAuditDetail,
+  uploadExcel,
   setFundingAuditFilter: (value) => {
     fundingAuditFilter = String(value || '');
     renderFundingLogPanel();
