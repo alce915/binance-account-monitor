@@ -65,6 +65,15 @@ const messageTextMap = {
 };
 const accountStatusTextMap = { NORMAL: '正常' };
 const positionSideTextMap = { LONG: '多', SHORT: '空', BOTH: '双向' };
+const groupTextMap = {
+  expandAccounts: '展开子账号',
+  collapseAccounts: '收起子账号',
+  healthy: '正常',
+  warning: '警惕',
+  danger: '危险',
+  accounts: '个账户',
+  uniMmr: 'UniMMR',
+};
 
 const groupExpandedState = {};
 const groupSelectedAccountState = {};
@@ -199,6 +208,13 @@ const uniMmrToneClass = (value) => {
   if (number > 1.5) return 'uni-mmr-good';
   if (number > 1.2) return 'uni-mmr-warn';
   return 'uni-mmr-bad';
+};
+const uniMmrToneKey = (value) => {
+  const toneClass = uniMmrToneClass(value);
+  if (toneClass === 'uni-mmr-good') return 'good';
+  if (toneClass === 'uni-mmr-warn') return 'warn';
+  if (toneClass === 'uni-mmr-bad') return 'bad';
+  return '';
 };
 const currentGroups = () => (Array.isArray(latestPayload?.groups) ? latestPayload.groups : []);
 const refreshButtonLabel = () => (refreshCooldownSeconds > 0 ? `${refreshCooldownSeconds}秒` : '立即刷新');
@@ -1569,7 +1585,7 @@ function distributionDisplayAmount(summary = {}, profitSummary = null, accounts 
 function renderUniMmrIndicator(account) {
   const value = account?.uni_mmr;
   const toneClass = uniMmrToneClass(value);
-  return `<div class="uni-mmr-indicator${toneClass ? ` ${toneClass}` : ''}">UniMMR ${escapeHtml(fmtUniMmr(value))}</div>`;
+  return `<div class="uni-mmr-indicator${toneClass ? ` ${toneClass}` : ''}">${escapeHtml(groupTextMap.uniMmr)} ${escapeHtml(fmtUniMmr(value))}</div>`;
 }
 
 function renderAccount(account) {
@@ -1629,10 +1645,31 @@ function renderGroupStatusBadges(summary = {}) {
   const successCount = Number(summary.success_count || 0);
   const errorCount = Number(summary.error_count || 0);
   const badges = [];
-  if (successCount > 0) badges.push(`<div class="badge status-ok">${fmtCount(successCount)} 正常</div>`);
+  if (successCount > 0) badges.push(`<div class="badge status-ok">${fmtCount(successCount)} ${escapeHtml(groupTextMap.healthy)}</div>`);
   if (errorCount > 0) badges.push(`<div class="badge status-error">${fmtCount(errorCount)} 异常</div>`);
-  if (!badges.length) badges.push(`<div class="badge">${fmtCount(summary.account_count || 0)} 个账户</div>`);
+  if (!badges.length) badges.push(`<div class="badge">${fmtCount(summary.account_count || 0)} ${escapeHtml(groupTextMap.accounts)}</div>`);
   return badges.join('');
+}
+
+function renderGroupUniMmrSummary(group = {}) {
+  const accounts = Array.isArray(group.accounts) ? group.accounts : [];
+  const counts = { good: 0, warn: 0, bad: 0 };
+  accounts.forEach((account) => {
+    const toneKey = uniMmrToneKey(account?.uni_mmr);
+    if (toneKey) {
+      counts[toneKey] += 1;
+    }
+  });
+  const items = [
+    counts.good > 0 ? `<span class="group-unimmr-item uni-mmr-good">${fmtCount(counts.good)} ${escapeHtml(groupTextMap.healthy)}</span>` : '',
+    counts.warn > 0 ? `<span class="group-unimmr-item uni-mmr-warn">${fmtCount(counts.warn)} ${escapeHtml(groupTextMap.warning)}</span>` : '',
+    counts.bad > 0 ? `<span class="group-unimmr-item uni-mmr-bad">${fmtCount(counts.bad)} ${escapeHtml(groupTextMap.danger)}</span>` : '',
+  ].filter(Boolean);
+  if (!items.length) {
+    return '';
+  }
+  const summaryToneClass = counts.bad > 0 ? 'uni-mmr-bad' : counts.warn > 0 ? 'uni-mmr-warn' : 'uni-mmr-good';
+  return `<div class="group-unimmr-summary ${summaryToneClass}"><span class="group-unimmr-label">${escapeHtml(groupTextMap.uniMmr)}</span>${items.join('')}</div>`;
 }
 
 function renderAccountListContent(group) {
@@ -1665,8 +1702,9 @@ function renderGroup(group) {
       <div class="group-head">
         <div><h2>${escapeHtml(group.main_account_name || group.main_account_id || '-')}</h2><div class="mono">${escapeHtml(mainAccountId)}</div></div>
         <div class="group-actions">
-          <button class="group-toggle-button" type="button" data-main-account-id="${escapeHtml(mainAccountId)}" aria-expanded="${expanded ? 'true' : 'false'}">${expanded ? '收起子账号' : '展开子账号'}</button>
+          ${renderGroupUniMmrSummary(group)}
           <div class="group-badges">${renderGroupStatusBadges(summary)}</div>
+          <button class="group-toggle-button" type="button" data-main-account-id="${escapeHtml(mainAccountId)}" aria-expanded="${expanded ? 'true' : 'false'}">${expanded ? groupTextMap.collapseAccounts : groupTextMap.expandAccounts}</button>
         </div>
       </div>
       <div class="group-summary">
@@ -1808,7 +1846,7 @@ function handleGroupToggle(mainAccountId) {
     return;
   }
 
-  toggleButton.textContent = expanded ? '收起子账号' : '展开子账号';
+  toggleButton.textContent = expanded ? groupTextMap.collapseAccounts : groupTextMap.expandAccounts;
   toggleButton.setAttribute('aria-expanded', expanded ? 'true' : 'false');
 
   if (!expanded) {

@@ -234,6 +234,124 @@ describe('monitor_v2.js', () => {
     expect(app.document.getElementById('groupsContainer').textContent).toContain('暂无分组');
   });
 
+  it('renders group UniMMR summary and places status badge before toggle button', () => {
+    const app = createApp();
+    apps.push(app);
+    app.api.resetTestState();
+
+    app.api.render(basePayload({
+      groups: [
+        {
+          main_account_id: 'group_a',
+          main_account_name: 'Group A',
+          summary: {
+            account_count: 3,
+            success_count: 3,
+            error_count: 0,
+            equity: '100',
+            margin: '50',
+            available_balance: '40',
+            unrealized_pnl: '0',
+            total_distribution: '0',
+            distribution_apy_7d: '0',
+          },
+          accounts: [
+            { ...baseAccount('group_a.sub1', 'Sub 1'), uni_mmr: '1.63' },
+            { ...baseAccount('group_a.sub2', 'Sub 2'), uni_mmr: '1.35' },
+            { ...baseAccount('group_a.sub3', 'Sub 3'), uni_mmr: '1.12' },
+          ],
+        },
+      ],
+    }));
+
+    const actions = app.document.querySelector('.group-actions');
+    const children = Array.from(actions.children);
+
+    expect(children[0].className).toContain('group-unimmr-summary');
+    expect(children[0].className).toContain('uni-mmr-bad');
+    expect(children[1].className).toContain('group-badges');
+    expect(children[2].className).toContain('group-toggle-button');
+    expect(children[0].textContent).toContain('UniMMR');
+    expect(children[0].textContent).toContain('1 正常');
+    expect(children[0].textContent).toContain('1 警惕');
+    expect(children[0].textContent).toContain('1 危险');
+  });
+
+  it('uses warning tone for the group UniMMR capsule when the worst account is warning', () => {
+    const app = createApp();
+    apps.push(app);
+    app.api.resetTestState();
+
+    app.api.render(basePayload({
+      groups: [
+        {
+          main_account_id: 'group_a',
+          main_account_name: 'Group A',
+          summary: {
+            account_count: 5,
+            success_count: 5,
+            error_count: 0,
+            equity: '100',
+            margin: '50',
+            available_balance: '40',
+            unrealized_pnl: '0',
+            total_distribution: '0',
+            distribution_apy_7d: '0',
+          },
+          accounts: [
+            { ...baseAccount('group_a.sub1', 'Sub 1'), uni_mmr: '1.63' },
+            { ...baseAccount('group_a.sub2', 'Sub 2'), uni_mmr: '1.61' },
+            { ...baseAccount('group_a.sub3', 'Sub 3'), uni_mmr: '1.60' },
+            { ...baseAccount('group_a.sub4', 'Sub 4'), uni_mmr: '1.59' },
+            { ...baseAccount('group_a.sub5', 'Sub 5'), uni_mmr: '1.35' },
+          ],
+        },
+      ],
+    }));
+
+    const summary = app.document.querySelector('.group-unimmr-summary');
+    expect(summary.className).toContain('uni-mmr-warn');
+    expect(summary.textContent).toContain('4 正常');
+    expect(summary.textContent).toContain('1 警惕');
+    expect(summary.textContent).not.toContain('危险');
+  });
+
+  it('hides zero-count group UniMMR states', () => {
+    const app = createApp();
+    apps.push(app);
+    app.api.resetTestState();
+
+    app.api.render(basePayload({
+      groups: [
+        {
+          main_account_id: 'group_a',
+          main_account_name: 'Group A',
+          summary: {
+            account_count: 2,
+            success_count: 2,
+            error_count: 0,
+            equity: '100',
+            margin: '50',
+            available_balance: '40',
+            unrealized_pnl: '0',
+            total_distribution: '0',
+            distribution_apy_7d: '0',
+          },
+          accounts: [
+            { ...baseAccount('group_a.sub1', 'Sub 1'), uni_mmr: '1.63' },
+            { ...baseAccount('group_a.sub2', 'Sub 2'), uni_mmr: '1.58' },
+          ],
+        },
+      ],
+    }));
+
+    const summary = app.document.querySelector('.group-unimmr-summary');
+    expect(summary.className).toContain('uni-mmr-good');
+    expect(summary.textContent).toContain('2 正常');
+    expect(summary.textContent).not.toContain('警惕');
+    expect(summary.textContent).not.toContain('危险');
+  });
+
   it('renders liquidation price after mark price in positions', () => {
     const app = createApp();
     apps.push(app);

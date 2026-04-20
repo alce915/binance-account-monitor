@@ -307,6 +307,63 @@
       flex-wrap: wrap;
     }
 
+    .group-unimmr-summary {
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
+      min-height: 36px;
+      padding: 7px 14px;
+      border: 1px solid rgba(46, 32, 14, 0.08);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.78);
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    .group-unimmr-summary.uni-mmr-good {
+      color: var(--good);
+      background: rgba(31, 122, 72, 0.12);
+    }
+
+    .group-unimmr-summary.uni-mmr-warn {
+      color: var(--warn);
+      background: rgba(176, 122, 0, 0.14);
+    }
+
+    .group-unimmr-summary.uni-mmr-bad {
+      color: var(--bad);
+      background: rgba(181, 70, 54, 0.12);
+    }
+
+    .group-unimmr-label {
+      font-weight: 800;
+    }
+
+    .group-unimmr-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      white-space: nowrap;
+      background: transparent;
+      padding: 0;
+      min-height: auto;
+      border: 0;
+    }
+
+    .group-unimmr-item.uni-mmr-good,
+    .group-unimmr-item.uni-mmr-warn,
+    .group-unimmr-item.uni-mmr-bad {
+      background: transparent;
+      padding: 0;
+      min-height: auto;
+    }
+
     .group-summary {
       padding: 18px 22px;
       display: grid;
