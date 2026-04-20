@@ -81,6 +81,28 @@ def _normalize_ip(value: str | None) -> str:
         return normalized
 
 
+def _parse_forwarded_ip(value: str | None) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return ""
+    if normalized.startswith("[") and "]" in normalized:
+        normalized = normalized[1 : normalized.find("]")]
+    try:
+        return str(ipaddress.ip_address(normalized))
+    except ValueError:
+        return ""
+
+
+def _resolve_proxy_forwarded_ip(request: Request) -> str:
+    forwarded_for = str(request.headers.get("x-forwarded-for") or "").strip()
+    if forwarded_for:
+        for candidate in forwarded_for.split(","):
+            forwarded_ip = _parse_forwarded_ip(candidate)
+            if forwarded_ip:
+                return forwarded_ip
+    return _parse_forwarded_ip(request.headers.get("x-real-ip"))
+
+
 def _is_page_request(request: Request) -> bool:
     path = request.url.path
     if (
@@ -244,9 +266,12 @@ class AccessControlService:
 
     def resolve_client_ip(self, request: Request) -> str:
         override = getattr(request.app.state, "test_client_ip", None)
-        if override:
-            return _normalize_ip(override)
-        return _normalize_ip(request.client.host if request.client else "")
+        client_ip = _normalize_ip(override or (request.client.host if request.client else ""))
+        if is_loopback_client(client_ip):
+            forwarded_ip = _resolve_proxy_forwarded_ip(request)
+            if forwarded_ip:
+                return forwarded_ip
+        return client_ip
 
     def _session_revision(self) -> str:
         if self._config is None:

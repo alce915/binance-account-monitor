@@ -97,6 +97,13 @@ UNI_MMR_ALERTS_ENABLED=true
 - `SECRETS_FILE=config/secrets.enc.json`
 - `MONITOR_MASTER_KEY_FILE=/etc/monitor-secrets/monitor-master-key`
 
+注意：
+
+- Excel 导入和所有 `*_secret_ref` 解析，都是由**运行中的服务进程**读取主密钥
+- 所以 `MONITOR_MASTER_KEY_FILE` 不只是 CLI 迁移时要有，systemd 常驻进程本身也必须拿到
+- 如果这里没配对，Linux 上最常见的报错就是：
+  - `MONITOR_MASTER_KEY_FILE or MONITOR_MASTER_KEY is required`
+
 ## 6. 配置访问控制
 
 推荐配置示例：
@@ -118,6 +125,12 @@ UNI_MMR_ALERTS_ENABLED=true
 - Linux 上也不再推荐在这里写明文密码
 - 只保留 ref
 - 真实密码在加密 secret 仓库中
+
+另外要特别注意：
+
+- `enabled=false` 就是开放模式，不会要求密码登录
+- `enabled=true` 才会启用游客 / 管理员密码
+- 如果 `whitelist_ips` 里放了你的公网出口 IP，该来源会直接白名单放行，也不会弹密码页
 
 ## 7. 一次性迁移现有明文 secret
 
@@ -215,6 +228,22 @@ sudo systemctl status binance-account-monitor
 journalctl -u binance-account-monitor -f
 ```
 
+如果你前面还有 nginx / 反向代理，建议同时配置：
+
+```nginx
+proxy_set_header Host $host;
+proxy_set_header X-Real-IP $remote_addr;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_pass http://127.0.0.1:8010;
+```
+
+当前服务只在**直连来源是 loopback** 时，才信任 `X-Forwarded-For` / `X-Real-IP`。
+这正好适配 Linux 上常见的：
+
+- `nginx -> 127.0.0.1:8010`
+
+但不会让外部客户端靠伪造头绕过认证。
+
 ## 10. 日常维护 Secret
 
 以后不要再把密码、Token、API key 明文写回配置文件。
@@ -258,6 +287,22 @@ curl -I http://127.0.0.1:8010/login
 curl http://127.0.0.1:8010/api/auth/session
 ```
 
+如果你在 Linux 上怀疑“密码没生效”，优先看这几个返回字段：
+
+- `enabled`
+- `whitelisted`
+- `auth_source`
+- `client_ip`
+
+典型判断：
+
+- `enabled=false`
+  - 说明当前还是开放模式
+- `auth_source=whitelist`
+  - 说明当前请求被白名单放行了，不会要求密码
+- `client_ip=127.0.0.1`
+  - 说明反代头没有传进来，应用只看到了 loopback
+
 ### Secret 权限
 
 ```bash
@@ -275,6 +320,46 @@ ls -l /opt/binance-account-monitor/config/secrets.enc.json
   - guest / admin password
   - `session_secret`
   - Telegram token
+
+## 13. Linux 常见故障
+
+### Excel 导入报 `MONITOR_MASTER_KEY_FILE or MONITOR_MASTER_KEY is required`
+
+优先检查：
+
+```bash
+sudo systemctl show binance-account-monitor -p Environment
+grep -n "MONITOR_MASTER_KEY_FILE" /opt/binance-account-monitor/.env
+sudo -u monitor test -r /etc/monitor-secrets/monitor-master-key && echo ok
+```
+
+你应该能同时确认：
+
+- systemd 环境里有：
+  - `MONITOR_MASTER_KEY_FILE=/etc/monitor-secrets/monitor-master-key`
+- `.env` 里也有同样的路径
+- 服务账号 `monitor` 对主密钥文件有读权限
+
+改完后执行：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart binance-account-monitor
+```
+
+### Linux 上“密码系统没生效”
+
+优先排查：
+
+1. `config/access_control.json` 是否还是：
+   - `"enabled": false`
+2. `whitelist_ips` 是否误包含了真实访问来源 IP
+3. `/api/auth/session` 是否返回：
+   - `auth_source=whitelist`
+   - 或 `client_ip=127.0.0.1`
+4. nginx 是否正确传了：
+   - `X-Forwarded-For`
+   - `X-Real-IP`
 
 ## 一句话总结
 

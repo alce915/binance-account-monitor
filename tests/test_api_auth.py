@@ -272,6 +272,52 @@ def test_whitelisted_ip_bypasses_login_but_receives_csrf_from_session_endpoint(t
     assert refresh_response.status_code == 200
 
 
+def test_loopback_proxy_trusts_x_forwarded_for_for_auth_decision(tmp_path: Path) -> None:
+    with TestClient(api_module.app) as client:
+        client.app.state.monitor = FakeMonitor()
+        client.app.state.access_control = build_auth_service(tmp_path, enabled=True)
+        client.app.state.test_client_ip = "127.0.0.1"
+
+        session_response = client.get("/api/auth/session", headers={"X-Forwarded-For": "198.51.100.10"})
+        write_response = client.post("/api/monitor/refresh", headers={"X-Forwarded-For": "198.51.100.10"})
+
+    assert session_response.status_code == 401
+    assert session_response.json()["error"]["code"] == "AUTH_REQUIRED"
+    assert write_response.status_code == 401
+    assert write_response.json()["error"]["code"] == "AUTH_REQUIRED"
+
+
+def test_loopback_proxy_uses_x_real_ip_when_forwarded_for_missing(tmp_path: Path) -> None:
+    with TestClient(api_module.app) as client:
+        client.app.state.monitor = FakeMonitor()
+        client.app.state.access_control = build_auth_service(tmp_path, enabled=True, whitelist_ips=["198.51.100.10"])
+        client.app.state.test_client_ip = "127.0.0.1"
+
+        session_response = client.get("/api/auth/session", headers={"X-Real-IP": "198.51.100.10"})
+        csrf_token = session_response.json()["csrf_token"]
+        refresh_response = client.post(
+            "/api/monitor/refresh",
+            headers={"X-Real-IP": "198.51.100.10", "X-CSRF-Token": csrf_token},
+        )
+
+    assert session_response.status_code == 200
+    assert session_response.json()["whitelisted"] is True
+    assert session_response.json()["client_ip"] == "198.51.100.10"
+    assert refresh_response.status_code == 200
+
+
+def test_non_loopback_client_does_not_trust_forwarded_headers(tmp_path: Path) -> None:
+    with TestClient(api_module.app) as client:
+        client.app.state.monitor = FakeMonitor()
+        client.app.state.access_control = build_auth_service(tmp_path, enabled=True, whitelist_ips=["127.0.0.1"])
+        client.app.state.test_client_ip = "198.51.100.20"
+
+        session_response = client.get("/api/auth/session", headers={"X-Forwarded-For": "127.0.0.1"})
+
+    assert session_response.status_code == 401
+    assert session_response.json()["error"]["code"] == "AUTH_REQUIRED"
+
+
 def test_login_rate_limit_blocks_after_five_failures(tmp_path: Path) -> None:
     with TestClient(api_module.app) as client:
         client.app.state.monitor = FakeMonitor()

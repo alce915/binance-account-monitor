@@ -110,6 +110,13 @@ binance-account-monitor
 - 再 `access_control.json`
 - 最后账号配置 / Excel 导入
 
+Linux 上如果 Excel 导入报：
+
+- `MONITOR_MASTER_KEY_FILE or MONITOR_MASTER_KEY is required`
+
+通常不是模板问题，而是**运行中的服务进程没拿到主密钥环境变量**。
+也就是说，不仅迁移 CLI 要有 `MONITOR_MASTER_KEY_FILE`，systemd 常驻进程本身也必须有。
+
 ## Excel 导入
 
 导入入口：
@@ -173,6 +180,20 @@ python -m monitor_app.secrets_cli doctor
 接入说明见：
 
 - [访问控制模块接入说明](docs/访问控制模块接入说明.md)
+
+补充两条很实用的判断：
+
+- `enabled=false`
+  - 就是开放模式，不要求密码
+- 命中 `whitelist_ips`
+  - 会直接白名单放行，也不会弹密码页
+
+如果 Linux 上前面挂了 `nginx -> 127.0.0.1:8010`，当前代码会在**直连来源是 loopback** 时信任：
+
+- `X-Forwarded-For`
+- `X-Real-IP`
+
+所以反代场景是支持的，但也要确保 nginx 真的把这两个头传了进来。
 
 ## Linux 部署
 
