@@ -1354,7 +1354,21 @@ async function copyFundingOperationId() {
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(operationId);
     } else {
-      throw new Error('clipboard unavailable');
+      const textArea = document.createElement('textarea');
+      textArea.value = operationId;
+      textArea.setAttribute('readonly', 'readonly');
+      textArea.style.position = 'fixed';
+      textArea.style.opacity = '0';
+      textArea.style.pointerEvents = 'none';
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      textArea.setSelectionRange(0, textArea.value.length);
+      const copied = typeof document.execCommand === 'function' && document.execCommand('copy');
+      textArea.remove();
+      if (!copied) {
+        throw new Error(`clipboard unavailable，请手动复制：${operationId}`);
+      }
     }
     appendFundingLog(`已复制操作ID：${shortOperationId(operationId)}`, 'success');
   } catch (error) {

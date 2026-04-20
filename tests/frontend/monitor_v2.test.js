@@ -136,6 +136,7 @@ function createApp() {
   window.navigator.clipboard = {
     writeText: vi.fn(async () => {}),
   };
+  window.document.execCommand = vi.fn(() => true);
   if (!window.CSS) {
     window.CSS = { escape: (value) => String(value) };
   }
@@ -707,6 +708,20 @@ describe('monitor_v2.js', () => {
 
     await app.api.copyFundingOperationId();
     expect(app.window.navigator.clipboard.writeText).toHaveBeenCalledWith('funding-op-older-0001');
+  });
+
+  it('falls back to execCommand copy when clipboard API is unavailable', async () => {
+    const app = createApp();
+    apps.push(app);
+    app.api.resetTestState();
+    app.api.setFundingPendingOperationId('funding-op-fallback-0001');
+    app.window.navigator.clipboard = undefined;
+    app.window.document.execCommand = vi.fn(() => true);
+
+    await app.api.copyFundingOperationId();
+
+    expect(app.window.document.execCommand).toHaveBeenCalledWith('copy');
+    expect(app.api.getFundingLogEntries()[0].message).toContain('已复制操作ID');
   });
 
   it('requests audit detail with direction when operation ids are reused across modes', async () => {
