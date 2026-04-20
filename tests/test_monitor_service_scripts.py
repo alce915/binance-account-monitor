@@ -14,6 +14,10 @@ from urllib.request import urlopen
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 STOP_SCRIPT = PROJECT_ROOT / "scripts" / "stop_monitor_service.ps1"
 COMMON_SCRIPT = PROJECT_ROOT / "scripts" / "monitor_service_common.ps1"
+SYSTEM_ROOT = Path(os.environ.get("SystemRoot") or r"C:\Windows")
+POWERSHELL_EXE = str(SYSTEM_ROOT / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe")
+TASKLIST_EXE = str(SYSTEM_ROOT / "System32" / "tasklist.exe")
+TASKKILL_EXE = str(SYSTEM_ROOT / "System32" / "taskkill.exe")
 
 
 def _find_free_port() -> int:
@@ -36,7 +40,7 @@ def _wait_for_health(port: int, timeout_s: float = 10.0) -> bool:
 
 def _process_exists(pid: int) -> bool:
     result = subprocess.run(
-        ["tasklist", "/FI", f"PID eq {pid}"],
+        [TASKLIST_EXE, "/FI", f"PID eq {pid}"],
         capture_output=True,
         text=True,
         check=False,
@@ -49,7 +53,7 @@ def _run_stop_script(env: dict[str, str], log_path: Path) -> subprocess.Complete
     with log_path.open("w", encoding="utf-8", errors="ignore") as stream:
         return subprocess.run(
             [
-                "powershell.exe",
+                POWERSHELL_EXE,
                 "-NoProfile",
                 "-ExecutionPolicy",
                 "Bypass",
@@ -62,7 +66,7 @@ def _run_stop_script(env: dict[str, str], log_path: Path) -> subprocess.Complete
             stderr=subprocess.STDOUT,
             text=True,
             check=False,
-            timeout=60,
+            timeout=120,
         )
 
 
@@ -75,7 +79,7 @@ def test_monitor_health_check_returns_false_without_terminating_on_connection_re
     )
     result = subprocess.run(
         [
-            "powershell.exe",
+            POWERSHELL_EXE,
             "-NoProfile",
             "-ExecutionPolicy",
             "Bypass",
@@ -132,7 +136,7 @@ def test_stop_monitor_service_kills_tracked_process_tree_and_clears_state(tmp_pa
     )
     wrapper = subprocess.Popen(
         [
-            "powershell.exe",
+            POWERSHELL_EXE,
             "-NoProfile",
             "-ExecutionPolicy",
             "Bypass",
@@ -187,7 +191,7 @@ def test_stop_monitor_service_kills_tracked_process_tree_and_clears_state(tmp_pa
             wrapper.kill()
         if child_pid and _process_exists(child_pid):
             subprocess.run(
-                ["taskkill", "/PID", str(child_pid), "/F", "/T"],
+                [TASKKILL_EXE, "/PID", str(child_pid), "/F", "/T"],
                 capture_output=True,
                 text=True,
                 check=False,

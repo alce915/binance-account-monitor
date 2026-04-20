@@ -3,15 +3,15 @@
     {
       "main_id": "group_a",
       "name": "Main Group A",
-      "transfer_api_key": "replace-with-main-transfer-api-key",
-      "transfer_api_secret": "replace-with-main-transfer-api-secret",
+      "transfer_api_key_secret_ref": "main_accounts.group_a.transfer_api_key",
+      "transfer_api_secret_secret_ref": "main_accounts.group_a.transfer_api_secret",
       "transfer_uid": "123456789",
       "children": [
         {
           "account_id": "sub1",
           "name": "Sub Account 1",
-          "api_key": "replace-with-api-key-1",
-          "api_secret": "replace-with-api-secret-1",
+          "api_key_secret_ref": "accounts.group_a.sub1.api_key",
+          "api_secret_secret_ref": "accounts.group_a.sub1.api_secret",
           "uid": "223456789",
           "use_testnet": false,
           "rest_base_url": "",
@@ -20,8 +20,8 @@
         {
           "account_id": "sub2",
           "name": "Sub Account 2",
-          "api_key": "replace-with-api-key-2",
-          "api_secret": "replace-with-api-secret-2",
+          "api_key_secret_ref": "accounts.group_a.sub2.api_key",
+          "api_secret_secret_ref": "accounts.group_a.sub2.api_secret",
           "uid": "323456789",
           "use_testnet": true,
           "rest_base_url": "",
@@ -32,12 +32,15 @@
     {
       "main_id": "group_b",
       "name": "Main Group B",
+      "transfer_api_key_secret_ref": "",
+      "transfer_api_secret_secret_ref": "",
+      "transfer_uid": "",
       "children": [
         {
           "account_id": "sub1",
           "name": "Sub Account 1",
-          "api_key": "replace-with-api-key-3",
-          "api_secret": "replace-with-api-secret-3",
+          "api_key_secret_ref": "accounts.group_b.sub1.api_key",
+          "api_secret_secret_ref": "accounts.group_b.sub1.api_secret",
           "uid": "423456789",
           "use_testnet": false,
           "rest_base_url": "",

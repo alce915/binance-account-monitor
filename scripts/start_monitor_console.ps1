@@ -142,6 +142,7 @@ $envConfig = Read-EnvConfig -Path $envFile
 $pythonInfo = Resolve-MonitorPython -ProjectRoot $projectRoot -EnvConfig $envConfig
 
 $hostAddress = Get-MonitorHostAddress -EnvConfig $envConfig
+$healthHostAddress = Get-MonitorHealthHostAddress -HostAddress $hostAddress
 $port = Get-MonitorPort -EnvConfig $envConfig
 $runtimeDir = Get-MonitorRuntimeDir -ProjectRoot $projectRoot
 $statePath = Get-MonitorStatePath -ProjectRoot $projectRoot
@@ -165,6 +166,9 @@ if (-not $cleanupResult.success -and $cleanupResult.pending_listener_pids.Count 
 }
 
 Write-Host "Starting monitor service at http://$hostAddress`:$port/" -ForegroundColor Green
+if ($healthHostAddress -ne $hostAddress) {
+    Write-Host "Using local health probe at http://$healthHostAddress`:$port/" -ForegroundColor DarkGray
+}
 Write-Host "Launching monitor service in background..." -ForegroundColor Yellow
 Write-Host ''
 
@@ -236,6 +240,7 @@ try {
         started_at = (Get-Date).ToString('o')
         stdout_log = $stdoutLogPath
         stderr_log = $stderrLogPath
+        health_host = $healthHostAddress
     }
 } catch {
     if ($process) {
@@ -246,3 +251,6 @@ try {
 }
 
 Write-Host "Monitor service is healthy at http://$hostAddress`:$port/" -ForegroundColor Green
+if ($healthHostAddress -ne $hostAddress) {
+    Write-Host "Local health probe passed via http://$healthHostAddress`:$port/" -ForegroundColor DarkGray
+}

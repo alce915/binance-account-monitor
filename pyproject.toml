@@ -9,6 +9,7 @@ description = "Independent Binance unified account monitor service."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "cryptography>=43,<46",
   "fastapi>=0.115,<1.0",
   "httpx>=0.28,<1.0",
   "openpyxl>=3.1,<4.0",

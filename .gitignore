@@ -11,6 +11,9 @@ binance_account_monitor.egg-info/
 monitor.runtime.log
 
 config/binance_monitor_accounts.json
+config/access_control.json
+config/secrets.enc.json
+.local-secrets/
 
 data/*.db
 data/*.db-shm
@@ -47,6 +50,14 @@ projects.json
 git-remote.json
 repo-name-overrides.json
 # <<< codex git-sync <<<
+
+
+
+
+
+
+
+
 
 
 

@@ -125,6 +125,13 @@
       justify-content: flex-end;
     }
 
+    .toolbar-auth {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
     .toolbar-stats {
       display: inline-flex;
       align-items: center;
@@ -1141,6 +1148,10 @@
         <div class="toolbar-stats" id="toolbarStats"></div>
       </div>
       <div class="toolbar-meta">
+        <div class="toolbar-auth">
+          <div class="badge" id="authRoleBadge">管理员</div>
+          <button class="refresh-button" id="logoutButton" type="button">退出登录</button>
+        </div>
         <div class="mono" id="updatedAt">-</div>
         <button class="refresh-button" id="refreshButton" type="button">立即刷新</button>
         <input id="importInput" type="file" accept=".xlsx" hidden>

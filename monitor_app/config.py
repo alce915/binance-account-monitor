@@ -10,6 +10,7 @@ from typing import Any
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from monitor_app.secrets import EncryptedFileSecretProvider
 
 ID_PATTERN = re.compile(r"^[a-z0-9_-]+$")
 
@@ -86,6 +87,9 @@ def parse_monitor_bool(value: str | bool | None, default: bool = False) -> bool:
 
 def parse_monitor_accounts_payload(
     payload: dict[str, Any],
+    *,
+    secret_provider: EncryptedFileSecretProvider | None = None,
+    allow_plaintext_secrets: bool = True,
 ) -> tuple[dict[str, MainAccountConfig], dict[str, MonitorAccountConfig]]:
     raw_main_accounts = payload.get("main_accounts") if isinstance(payload, dict) else None
     if not isinstance(raw_main_accounts, list):
@@ -102,8 +106,22 @@ def parse_monitor_accounts_payload(
         main_name = str(raw_main_account.get("name") or "").strip()
         if not main_name:
             raise ValueError(f"Main account {main_id} must define name")
-        transfer_api_key = str(raw_main_account.get("transfer_api_key") or "").strip()
-        transfer_api_secret = str(raw_main_account.get("transfer_api_secret") or "").strip()
+        transfer_api_key = _resolve_secret_value(
+            raw_main_account,
+            plaintext_field="transfer_api_key",
+            ref_field="transfer_api_key_secret_ref",
+            secret_provider=secret_provider,
+            allow_plaintext=allow_plaintext_secrets,
+            required=False,
+        )
+        transfer_api_secret = _resolve_secret_value(
+            raw_main_account,
+            plaintext_field="transfer_api_secret",
+            ref_field="transfer_api_secret_secret_ref",
+            secret_provider=secret_provider,
+            allow_plaintext=allow_plaintext_secrets,
+            required=False,
+        )
         transfer_uid = str(raw_main_account.get("transfer_uid") or "").strip()
         raw_children = raw_main_account.get("children")
         if not isinstance(raw_children, list) or not raw_children:
@@ -120,8 +138,22 @@ def parse_monitor_accounts_payload(
             child_name = str(raw_child.get("name") or "").strip()
             if not child_name:
                 raise ValueError(f"Child account {main_id}.{child_account_id} must define name")
-            api_key = str(raw_child.get("api_key") or "").strip()
-            api_secret = str(raw_child.get("api_secret") or "").strip()
+            api_key = _resolve_secret_value(
+                raw_child,
+                plaintext_field="api_key",
+                ref_field="api_key_secret_ref",
+                secret_provider=secret_provider,
+                allow_plaintext=allow_plaintext_secrets,
+                required=True,
+            )
+            api_secret = _resolve_secret_value(
+                raw_child,
+                plaintext_field="api_secret",
+                ref_field="api_secret_secret_ref",
+                secret_provider=secret_provider,
+                allow_plaintext=allow_plaintext_secrets,
+                required=True,
+            )
             if not api_key or not api_secret:
                 raise ValueError(f"Child account {main_id}.{child_account_id} must define api_key and api_secret")
             composite_account_id = f"{main_id}.{child_account_id}"
@@ -156,17 +188,48 @@ def parse_monitor_accounts_payload(
     return main_accounts, monitor_accounts
 
 
+def _resolve_secret_value(
+    payload: dict[str, Any],
+    *,
+    plaintext_field: str,
+    ref_field: str,
+    secret_provider: EncryptedFileSecretProvider | None,
+    allow_plaintext: bool,
+    required: bool,
+) -> str:
+    plaintext_value = str(payload.get(plaintext_field) or "").strip()
+    ref_value = str(payload.get(ref_field) or "").strip()
+    if ref_value:
+        if secret_provider is None:
+            raise ValueError(f"Secret provider is required for {ref_field}")
+        try:
+            return secret_provider.get_secret(ref_value)
+        except KeyError as exc:
+            raise ValueError(f"Secret ref not found: {ref_value}") from exc
+    if plaintext_value and allow_plaintext:
+        return plaintext_value
+    if plaintext_value and not allow_plaintext:
+        raise ValueError(f"{plaintext_field} plaintext value is not allowed in refs-only mode")
+    if required:
+        raise ValueError(f"{plaintext_field} is required")
+    return ""
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=(".env",),
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
+        populate_by_name=True,
+        validate_by_name=True,
+        validate_by_alias=True,
     )
 
     monitor_app_name: str = "Binance Account Monitor"
     monitor_api_host: str = "127.0.0.1"
     monitor_api_port: int = 8010
+    access_control_config_file: Path = Path("config/access_control.json")
     monitor_accounts_file: Path = Path("config/binance_monitor_accounts.json")
     monitor_history_db_path: Path = Path("data/monitor_history.db")
     monitor_refresh_interval_ms: int = 600_000
@@ -190,14 +253,24 @@ class Settings(BaseSettings):
     tg_enabled: bool = False
     tg_bot_token: str = ""
     tg_chat_id: str = ""
+    tg_bot_token_secret_ref: str = ""
+    tg_chat_id_secret_ref: str = ""
     tg_proxy_url: str = ""
     tg_max_queue_size: int = 50
     tg_dry_run: bool = False
+    allow_plaintext_secrets: bool = False
+    secrets_file: Path = Path("config/secrets.enc.json")
+    monitor_master_key: str = ""
+    monitor_master_key_file: str = ""
+    env_file_path: Path = Path(".env")
+    admin_idle_timeout_minutes: int = 30
+    guest_idle_timeout_minutes: int = 120
     unimmr_alerts_enabled: bool = Field(
         default=False,
-        validation_alias=AliasChoices("UNI_MMR_ALERTS_ENABLED", "UNIMMR_ALERTS_ENABLED"),
+        validation_alias=AliasChoices("unimmr_alerts_enabled", "UNI_MMR_ALERTS_ENABLED", "UNIMMR_ALERTS_ENABLED"),
     )
     unimmr_alert_event_max_rows: int = 2_000
+    auth_audit_max_rows: int = 2_000
 
     monitor_accounts: dict[str, MonitorAccountConfig] = Field(default_factory=dict)
     monitor_main_accounts: dict[str, MainAccountConfig] = Field(default_factory=dict)
@@ -212,13 +285,123 @@ class Settings(BaseSettings):
             payload = json.loads(path.read_text(encoding="utf-8-sig"))
         except (OSError, json.JSONDecodeError) as exc:
             raise ValueError(f"Invalid monitor accounts file: {path}") from exc
-        self.monitor_main_accounts, self.monitor_accounts = parse_monitor_accounts_payload(payload)
+        provider = self.build_secret_provider(required=False)
+        self.monitor_main_accounts, self.monitor_accounts = parse_monitor_accounts_payload(
+            payload,
+            secret_provider=provider,
+            allow_plaintext_secrets=self.allow_plaintext_secrets,
+        )
 
     def _normalize_id(self, value: object, *, field_name: str) -> str:
         return normalize_monitor_id(value, field_name=field_name)
 
     def _as_bool(self, value: str | bool | None, default: bool = False) -> bool:
         return parse_monitor_bool(value, default)
+
+    def build_secret_provider(self, *, required: bool = False) -> EncryptedFileSecretProvider | None:
+        master_key_file = str(self.monitor_master_key_file or "").strip()
+        master_key = str(self.monitor_master_key or "").strip()
+        if master_key_file:
+            key_path = Path(master_key_file)
+            if not key_path.exists():
+                raise ValueError(f"Secret master key file not found: {key_path}")
+            master_key = key_path.read_text(encoding="utf-8").strip()
+        if not master_key:
+            if required:
+                raise ValueError("MONITOR_MASTER_KEY_FILE or MONITOR_MASTER_KEY is required")
+            return None
+        return EncryptedFileSecretProvider(self.secrets_file, master_key=master_key)
+
+    def resolve_secret_value(
+        self,
+        *,
+        secret_ref: str = "",
+        plaintext_value: str = "",
+        allow_plaintext: bool | None = None,
+        required: bool = False,
+        field_name: str = "secret",
+    ) -> str:
+        allow_plaintext_value = self.allow_plaintext_secrets if allow_plaintext is None else bool(allow_plaintext)
+        ref_value = str(secret_ref or "").strip()
+        if ref_value:
+            provider = self.build_secret_provider(required=True)
+            assert provider is not None
+            try:
+                return provider.get_secret(ref_value)
+            except KeyError as exc:
+                raise ValueError(f"Secret ref not found for {field_name}: {ref_value}") from exc
+        direct_value = str(plaintext_value or "").strip()
+        if direct_value and allow_plaintext_value:
+            return direct_value
+        if direct_value and not allow_plaintext_value:
+            raise ValueError(f"{field_name} plaintext value is not allowed in refs-only mode")
+        if required:
+            raise ValueError(f"{field_name} is required")
+        return ""
+
+    def resolved_tg_bot_token(self) -> str:
+        return self.resolve_secret_value(
+            secret_ref=self.tg_bot_token_secret_ref,
+            plaintext_value=self.tg_bot_token,
+            allow_plaintext=self.allow_plaintext_secrets,
+            required=False,
+            field_name="tg_bot_token",
+        )
+
+    def resolved_tg_chat_id(self) -> str:
+        return self.resolve_secret_value(
+            secret_ref=self.tg_chat_id_secret_ref,
+            plaintext_value=self.tg_chat_id,
+            allow_plaintext=self.allow_plaintext_secrets,
+            required=False,
+            field_name="tg_chat_id",
+        )
+
+    def capture_runtime_env_overrides_snapshot(self) -> dict[str, str]:
+        return {
+            "monitor_master_key": str(self.monitor_master_key or "").strip(),
+            "monitor_master_key_file": str(self.monitor_master_key_file or "").strip(),
+            "tg_bot_token": str(self.tg_bot_token or "").strip(),
+            "tg_chat_id": str(self.tg_chat_id or "").strip(),
+            "tg_bot_token_secret_ref": str(self.tg_bot_token_secret_ref or "").strip(),
+            "tg_chat_id_secret_ref": str(self.tg_chat_id_secret_ref or "").strip(),
+        }
+
+    def restore_runtime_env_overrides_snapshot(self, snapshot: dict[str, str] | None) -> None:
+        snapshot = snapshot or {}
+        self.monitor_master_key = str(snapshot.get("monitor_master_key") or "").strip()
+        self.monitor_master_key_file = str(snapshot.get("monitor_master_key_file") or "").strip()
+        self.tg_bot_token = str(snapshot.get("tg_bot_token") or "").strip()
+        self.tg_chat_id = str(snapshot.get("tg_chat_id") or "").strip()
+        self.tg_bot_token_secret_ref = str(snapshot.get("tg_bot_token_secret_ref") or "").strip()
+        self.tg_chat_id_secret_ref = str(snapshot.get("tg_chat_id_secret_ref") or "").strip()
+
+    def reload_runtime_env_overrides(self, *, env_content: str | None = None) -> None:
+        if env_content is None:
+            env_path = Path(self.env_file_path)
+            if not env_path.exists():
+                return
+            env_content = env_path.read_text(encoding="utf-8")
+
+        env_values: dict[str, str] = {}
+        for raw_line in str(env_content or "").splitlines():
+            if not raw_line or raw_line.lstrip().startswith("#") or "=" not in raw_line:
+                continue
+            key, value = raw_line.split("=", 1)
+            env_values[key.strip()] = value.strip()
+
+        if "MONITOR_MASTER_KEY" in env_values:
+            self.monitor_master_key = str(env_values.get("MONITOR_MASTER_KEY") or "").strip()
+        if "MONITOR_MASTER_KEY_FILE" in env_values:
+            self.monitor_master_key_file = str(env_values.get("MONITOR_MASTER_KEY_FILE") or "").strip()
+        if "TG_BOT_TOKEN" in env_values:
+            self.tg_bot_token = str(env_values.get("TG_BOT_TOKEN") or "").strip()
+        if "TG_CHAT_ID" in env_values:
+            self.tg_chat_id = str(env_values.get("TG_CHAT_ID") or "").strip()
+        if "TG_BOT_TOKEN_SECRET_REF" in env_values:
+            self.tg_bot_token_secret_ref = str(env_values.get("TG_BOT_TOKEN_SECRET_REF") or "").strip()
+        if "TG_CHAT_ID_SECRET_REF" in env_values:
+            self.tg_chat_id_secret_ref = str(env_values.get("TG_CHAT_ID_SECRET_REF") or "").strip()
 
 
 settings = Settings()

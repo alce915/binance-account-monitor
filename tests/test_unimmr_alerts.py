@@ -9,6 +9,14 @@ from monitor_app.config import Settings
 from monitor_app.unimmr_alerts import DEDUPE_RETENTION_MS, UniMmrAlertService
 
 
+def _build_settings(tmp_path: Path, **overrides) -> Settings:
+    overrides.setdefault("allow_plaintext_secrets", True)
+    settings = Settings(_env_file=None, monitor_history_db_path=tmp_path / "history.db", **overrides)
+    if "unimmr_alerts_enabled" in overrides:
+        settings.unimmr_alerts_enabled = bool(overrides["unimmr_alerts_enabled"])
+    return settings
+
+
 class RecordingNotifier:
     def __init__(self) -> None:
         self.messages: list[dict[str, object]] = []
@@ -81,14 +89,14 @@ def _build_payload(value: str, *, account_id: str = "group_a.sub1") -> dict:
 
 @pytest.mark.asyncio
 async def test_unimmr_warning_entry_and_step_drop_alerts(tmp_path: Path) -> None:
-    settings = Settings(_env_file=None, monitor_history_db_path=tmp_path / "history.db", unimmr_alerts_enabled=True)
+    settings = _build_settings(tmp_path, unimmr_alerts_enabled=True)
     clock = Clock(1_000_000)
     notifier = RecordingNotifier()
     service = UniMmrAlertService(settings, notifier=notifier, now_ms=clock)
     try:
         await service.evaluate_payload(_build_payload("1.50"))
         assert len(notifier.messages) == 1
-        assert "\u8fdb\u5165 UniMMR \u9884\u8b66\u533a\u95f4" in str(notifier.messages[0]["text"])
+        assert "进入 UniMMR 预警区间" in str(notifier.messages[0]["text"])
 
         clock.advance(60_000)
         await service.evaluate_payload(_build_payload("1.45"))
@@ -104,7 +112,7 @@ async def test_unimmr_warning_entry_and_step_drop_alerts(tmp_path: Path) -> None
 
 @pytest.mark.asyncio
 async def test_unimmr_warning_reentry_cooldown_blocks_entry_but_not_new_step(tmp_path: Path) -> None:
-    settings = Settings(_env_file=None, monitor_history_db_path=tmp_path / "history.db", unimmr_alerts_enabled=True)
+    settings = _build_settings(tmp_path, unimmr_alerts_enabled=True)
     clock = Clock(2_000_000)
     notifier = RecordingNotifier()
     service = UniMmrAlertService(settings, notifier=notifier, now_ms=clock)
@@ -117,7 +125,7 @@ async def test_unimmr_warning_reentry_cooldown_blocks_entry_but_not_new_step(tmp
         clock.advance(60_000)
         await service.evaluate_payload(_build_payload("1.60"))
         assert len(notifier.messages) == 2
-        assert "UniMMR \u5df2\u4ece\u9884\u8b66\u533a\u95f4\u6062\u590d\u5230\u5b89\u5168\u533a\u95f4" in str(notifier.messages[1]["text"])
+        assert "UniMMR 已从预警区间恢复到安全区间" in str(notifier.messages[1]["text"])
 
         clock.advance(60_000)
         await service.evaluate_payload(_build_payload("1.50"))
@@ -133,14 +141,14 @@ async def test_unimmr_warning_reentry_cooldown_blocks_entry_but_not_new_step(tmp
 
 @pytest.mark.asyncio
 async def test_unimmr_danger_repeat_and_step_drop_alerts(tmp_path: Path) -> None:
-    settings = Settings(_env_file=None, monitor_history_db_path=tmp_path / "history.db", unimmr_alerts_enabled=True)
+    settings = _build_settings(tmp_path, unimmr_alerts_enabled=True)
     clock = Clock(3_000_000)
     notifier = RecordingNotifier()
     service = UniMmrAlertService(settings, notifier=notifier, now_ms=clock)
     try:
         await service.evaluate_payload(_build_payload("1.20"))
         assert len(notifier.messages) == 1
-        assert "\u8fdb\u5165 UniMMR \u5371\u9669\u533a\u95f4" in str(notifier.messages[0]["text"])
+        assert "进入 UniMMR 危险区间" in str(notifier.messages[0]["text"])
 
         clock.advance(4 * 60_000)
         await service.evaluate_payload(_build_payload("1.19"))
@@ -149,7 +157,7 @@ async def test_unimmr_danger_repeat_and_step_drop_alerts(tmp_path: Path) -> None
         clock.advance(60_000)
         await service.evaluate_payload(_build_payload("1.19"))
         assert len(notifier.messages) == 2
-        assert "UniMMR \u5371\u9669\u533a\u95f4 5 \u5206\u949f\u7eed\u62a5" in str(notifier.messages[1]["text"])
+        assert "UniMMR 危险区间 5 分钟续报" in str(notifier.messages[1]["text"])
 
         clock.advance(60_000)
         await service.evaluate_payload(_build_payload("1.15"))
@@ -161,7 +169,7 @@ async def test_unimmr_danger_repeat_and_step_drop_alerts(tmp_path: Path) -> None
 
 @pytest.mark.asyncio
 async def test_unimmr_recovery_requires_two_refreshes(tmp_path: Path) -> None:
-    settings = Settings(_env_file=None, monitor_history_db_path=tmp_path / "history.db", unimmr_alerts_enabled=True)
+    settings = _build_settings(tmp_path, unimmr_alerts_enabled=True)
     clock = Clock(4_000_000)
     notifier = RecordingNotifier()
     service = UniMmrAlertService(settings, notifier=notifier, now_ms=clock)
@@ -176,21 +184,21 @@ async def test_unimmr_recovery_requires_two_refreshes(tmp_path: Path) -> None:
         clock.advance(60_000)
         await service.evaluate_payload(_build_payload("1.31"))
         assert len(notifier.messages) == 2
-        assert "UniMMR \u5df2\u4ece\u5371\u9669\u533a\u95f4\u6062\u590d\u5230\u9884\u8b66\u533a\u95f4" in str(notifier.messages[1]["text"])
+        assert "UniMMR 已从危险区间恢复到预警区间" in str(notifier.messages[1]["text"])
     finally:
         await service.close()
 
 
 @pytest.mark.asyncio
 async def test_unimmr_recovery_does_not_fire_warning_drop_before_recovery_confirmation(tmp_path: Path) -> None:
-    settings = Settings(_env_file=None, monitor_history_db_path=tmp_path / "history.db", unimmr_alerts_enabled=True)
+    settings = _build_settings(tmp_path, unimmr_alerts_enabled=True)
     clock = Clock(5_000_000)
     notifier = RecordingNotifier()
     service = UniMmrAlertService(settings, notifier=notifier, now_ms=clock)
     try:
         await service.evaluate_payload(_build_payload("1.20"))
         assert len(notifier.messages) == 1
-        assert "\u8fdb\u5165 UniMMR \u5371\u9669\u533a\u95f4" in str(notifier.messages[0]["text"])
+        assert "进入 UniMMR 危险区间" in str(notifier.messages[0]["text"])
 
         clock.advance(60_000)
         await service.evaluate_payload(_build_payload("1.30"))
@@ -199,7 +207,7 @@ async def test_unimmr_recovery_does_not_fire_warning_drop_before_recovery_confir
         clock.advance(60_000)
         await service.evaluate_payload(_build_payload("1.30"))
         assert len(notifier.messages) == 2
-        assert "UniMMR \u5df2\u4ece\u5371\u9669\u533a\u95f4\u6062\u590d\u5230\u9884\u8b66\u533a\u95f4" in str(notifier.messages[1]["text"])
+        assert "UniMMR 已从危险区间恢复到预警区间" in str(notifier.messages[1]["text"])
 
         summary = await service.status_summary()
         account = summary["accounts"][0]
@@ -212,7 +220,7 @@ async def test_unimmr_recovery_does_not_fire_warning_drop_before_recovery_confir
 
 @pytest.mark.asyncio
 async def test_unimmr_simulation_does_not_mutate_live_state(tmp_path: Path) -> None:
-    settings = Settings(_env_file=None, monitor_history_db_path=tmp_path / "history.db", unimmr_alerts_enabled=True)
+    settings = _build_settings(tmp_path, unimmr_alerts_enabled=True)
     clock = Clock(6_000_000)
     notifier = RecordingNotifier()
     service = UniMmrAlertService(settings, notifier=notifier, now_ms=clock)
@@ -232,7 +240,7 @@ async def test_unimmr_simulation_does_not_mutate_live_state(tmp_path: Path) -> N
 
 @pytest.mark.asyncio
 async def test_unimmr_simulation_ignores_existing_live_state(tmp_path: Path) -> None:
-    settings = Settings(_env_file=None, monitor_history_db_path=tmp_path / "history.db", unimmr_alerts_enabled=True)
+    settings = _build_settings(tmp_path, unimmr_alerts_enabled=True)
     clock = Clock(6_500_000)
     notifier = RecordingNotifier()
     service = UniMmrAlertService(settings, notifier=notifier, now_ms=clock)
@@ -252,7 +260,7 @@ async def test_unimmr_simulation_ignores_existing_live_state(tmp_path: Path) -> 
 
 @pytest.mark.asyncio
 async def test_unimmr_dedupe_state_prunes_expired_rows(tmp_path: Path) -> None:
-    settings = Settings(_env_file=None, monitor_history_db_path=tmp_path / "history.db", unimmr_alerts_enabled=True)
+    settings = _build_settings(tmp_path, unimmr_alerts_enabled=True)
     clock = Clock(7_000_000)
     notifier = RecordingNotifier()
     service = UniMmrAlertService(settings, notifier=notifier, now_ms=clock)
@@ -277,6 +285,7 @@ async def test_unimmr_event_table_prunes_old_rows(tmp_path: Path) -> None:
         unimmr_alerts_enabled=True,
         unimmr_alert_event_max_rows=3,
     )
+    settings.unimmr_alerts_enabled = True
     clock = Clock(8_000_000)
     notifier = RecordingNotifier()
     service = UniMmrAlertService(settings, notifier=notifier, now_ms=clock)

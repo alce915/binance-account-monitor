@@ -31,6 +31,7 @@ async def test_telegram_notification_service_dry_run_records_without_sending(tmp
     settings = Settings(
         _env_file=None,
         monitor_history_db_path=tmp_path / "history.db",
+        allow_plaintext_secrets=True,
         tg_enabled=True,
         tg_bot_token="token",
         tg_chat_id="chat",
@@ -56,6 +57,7 @@ async def test_telegram_notification_service_survives_callback_failures(tmp_path
     settings = Settings(
         _env_file=None,
         monitor_history_db_path=tmp_path / "history.db",
+        allow_plaintext_secrets=True,
         tg_enabled=True,
         tg_bot_token="token",
         tg_chat_id="chat",

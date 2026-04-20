@@ -15,6 +15,7 @@ if (-not (Ensure-MonitorAdmin -ScriptPath $PSCommandPath -KeepWindowOpen)) {
 
 $envConfig = Read-EnvConfig -Path $envFile
 $hostAddress = Get-MonitorHostAddress -EnvConfig $envConfig
+$healthHostAddress = Get-MonitorHealthHostAddress -HostAddress $hostAddress
 $port = Get-MonitorPort -EnvConfig $envConfig
 
 $stopResult = Stop-MonitorServiceInstance -ProjectRoot $projectRoot -HostAddress $hostAddress -Port $port -TimeoutSeconds 10
@@ -26,7 +27,7 @@ if (-not $stopResult.state_found -and $stopResult.attempted_pids.Count -eq 0) {
 Write-Output "[monitor] Attempted process count: $($stopResult.attempted_pids.Count)"
 Write-Output "[monitor] Stopped process count: $($stopResult.stopped_pids.Count)"
 if ($stopResult.success) {
-    Write-Output "[monitor] Service is no longer reachable at http://$hostAddress`:$port/"
+    Write-Output "[monitor] Service is no longer reachable at http://$healthHostAddress`:$port/"
     return
 }
 

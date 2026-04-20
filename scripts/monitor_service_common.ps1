@@ -51,7 +51,8 @@ function Ensure-MonitorAdmin {
     param(
         [Parameter(Mandatory = $true)]
         [string]$ScriptPath,
-        [switch]$KeepWindowOpen
+        [switch]$KeepWindowOpen,
+        [string[]]$ScriptArguments = @()
     )
 
     if (Test-MonitorElevationBypass) {
@@ -69,7 +70,10 @@ function Ensure-MonitorAdmin {
     if ($KeepWindowOpen) {
         $argumentList += '-NoExit'
     }
-    $argumentList += '-ExecutionPolicy', 'Bypass', '-File', "`"$ScriptPath`""
+    $argumentList += '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath
+    if ($ScriptArguments) {
+        $argumentList += @($ScriptArguments | Where-Object { $_ -ne $null })
+    }
     Start-Process -FilePath (Get-MonitorPowerShellPath) -ArgumentList $argumentList -WindowStyle Normal -Verb RunAs | Out-Null
     return $false
 }
@@ -109,6 +113,22 @@ function Get-MonitorHostAddress {
     }
 
     return '127.0.0.1'
+}
+
+function Get-MonitorHealthHostAddress {
+    param([string]$HostAddress)
+
+    $normalized = ([string]$HostAddress).Trim()
+    if (-not $normalized) {
+        return '127.0.0.1'
+    }
+
+    switch ($normalized.ToLowerInvariant()) {
+        '0.0.0.0' { return '127.0.0.1' }
+        '::' { return '::1' }
+        '[::]' { return '::1' }
+        default { return $normalized }
+    }
 }
 
 function Get-MonitorPort {
@@ -213,7 +233,8 @@ function Test-ServiceHealth {
         [int]$TimeoutMilliseconds = 3000
     )
 
-    $uri = "http://$HostAddress`:$Port/healthz"
+    $probeHostAddress = Get-MonitorHealthHostAddress -HostAddress $HostAddress
+    $uri = "http://$probeHostAddress`:$Port/healthz"
     $request = [System.Net.HttpWebRequest]::Create($uri)
     $request.Method = 'GET'
     $request.Timeout = $TimeoutMilliseconds

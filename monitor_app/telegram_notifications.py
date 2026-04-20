@@ -63,6 +63,8 @@ class TelegramNotificationService:
         self._settings = settings
         self._sender = sender
         self._now_ms = now_ms or (lambda: int(datetime.now(UTC).timestamp() * 1000))
+        self._bot_token = settings.resolved_tg_bot_token()
+        self._chat_id = settings.resolved_tg_chat_id()
         self._queue: deque[TelegramNotificationItem] = deque()
         self._queue_lock = asyncio.Lock()
         self._queue_event = asyncio.Event()
@@ -73,7 +75,11 @@ class TelegramNotificationService:
 
     @property
     def enabled(self) -> bool:
-        return bool(self._settings.tg_enabled and self._settings.tg_bot_token and self._settings.tg_chat_id)
+        return bool(self._settings.tg_enabled and self._bot_token and self._chat_id)
+
+    def reload_credentials(self) -> None:
+        self._bot_token = self._settings.resolved_tg_bot_token()
+        self._chat_id = self._settings.resolved_tg_chat_id()
 
     async def start(self) -> None:
         if self._worker_task is None or self._worker_task.done():
@@ -266,7 +272,7 @@ class TelegramNotificationService:
     async def _send_message(self, text: str) -> dict[str, Any]:
         if self._sender is not None:
             return await self._sender(text, proxy_url=self._settings.tg_proxy_url or None)  # type: ignore[misc]
-        endpoint = f"https://api.telegram.org/bot{self._settings.tg_bot_token}/sendMessage"
+        endpoint = f"https://api.telegram.org/bot{self._bot_token}/sendMessage"
         transport_kwargs: dict[str, Any] = {}
         if self._settings.tg_proxy_url:
             transport_kwargs["proxy"] = self._settings.tg_proxy_url
@@ -274,7 +280,7 @@ class TelegramNotificationService:
         async with httpx.AsyncClient(timeout=timeout, **transport_kwargs) as client:
             response = await client.post(
                 endpoint,
-                json={"chat_id": self._settings.tg_chat_id, "text": text},
+                json={"chat_id": self._chat_id, "text": text},
             )
         payload: dict[str, Any]
         try:

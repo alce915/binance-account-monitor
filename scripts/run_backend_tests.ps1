@@ -1,3 +1,8 @@
+param(
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$PytestArgs
+)
+
 $ErrorActionPreference = 'Stop'
 
 $projectRoot = Split-Path $PSScriptRoot -Parent
@@ -8,11 +13,6 @@ $localVenvSitePackages = Join-Path $projectRoot '.venv\Lib\site-packages'
 $runtimeDir = Join-Path $projectRoot 'data\runtime'
 $stdoutLogPath = Join-Path $runtimeDir 'pytest.stdout.log'
 $stderrLogPath = Join-Path $runtimeDir 'pytest.stderr.log'
-
-param(
-    [Parameter(ValueFromRemainingArguments = $true)]
-    [string[]]$PytestArgs
-)
 
 if (-not (Test-Path $commonScript)) {
     throw "Missing monitor service helper script: $commonScript"
@@ -67,6 +67,39 @@ function Get-TestSitePackages {
     throw 'Virtual environment site-packages directory was not found.'
 }
 
+function Normalize-TestProcessEnvironment {
+    $processVariables = [System.Environment]::GetEnvironmentVariables('Process')
+    $pathValue = $null
+
+    foreach ($candidate in @('Path', 'PATH')) {
+        if ($processVariables.ContainsKey($candidate) -and $processVariables[$candidate]) {
+            $pathValue = [string]$processVariables[$candidate]
+            break
+        }
+    }
+
+    if ($pathValue) {
+        [System.Environment]::SetEnvironmentVariable('Path', $pathValue, 'Process')
+    }
+
+    [System.Environment]::SetEnvironmentVariable('PATH', $null, 'Process')
+}
+
+function Try-RewriteUtf8Log {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [Parameter(Mandatory = $true)]
+        [string]$Content
+    )
+
+    try {
+        Set-Content -Path $Path -Value $Content -Encoding UTF8
+    } catch {
+        Write-Warning "Failed to rewrite log as UTF-8: $Path ($($_.Exception.Message))"
+    }
+}
+
 if (-not (Test-Path $runtimeDir)) {
     New-Item -ItemType Directory -Path $runtimeDir -Force | Out-Null
 }
@@ -82,33 +115,33 @@ Write-Host "Using Python: $pythonExe" -ForegroundColor Cyan
 Write-Host "Using site-packages: $sitePackages" -ForegroundColor Cyan
 Write-Host "Running: python -m pytest $($PytestArgs -join ' ')" -ForegroundColor Yellow
 
-$psi = New-Object System.Diagnostics.ProcessStartInfo
-$psi.FileName = $pythonExe
-$psi.ArgumentList.Add('-m') | Out-Null
-$psi.ArgumentList.Add('pytest') | Out-Null
-foreach ($arg in $PytestArgs) {
-    $psi.ArgumentList.Add($arg) | Out-Null
+Normalize-TestProcessEnvironment
+$previousPythonPath = [System.Environment]::GetEnvironmentVariable('PYTHONPATH', 'Process')
+$env:PYTHONPATH = "$projectRoot;$sitePackages"
+
+try {
+    $process = Start-Process `
+        -FilePath $pythonExe `
+        -ArgumentList $pytestArguments `
+        -WorkingDirectory $projectRoot `
+        -RedirectStandardOutput $stdoutLogPath `
+        -RedirectStandardError $stderrLogPath `
+        -WindowStyle Hidden `
+        -PassThru `
+        -Wait
+} finally {
+    [System.Environment]::SetEnvironmentVariable('PYTHONPATH', $previousPythonPath, 'Process')
 }
-$psi.WorkingDirectory = $projectRoot
-$psi.UseShellExecute = $false
-$psi.RedirectStandardOutput = $true
-$psi.RedirectStandardError = $true
-$null = $psi.Environment
-$psi.Environment['PYTHONPATH'] = "$projectRoot;$sitePackages"
 
-$process = New-Object System.Diagnostics.Process
-$process.StartInfo = $psi
-
-if ($process.Start() -ne $true) {
+if (-not $process) {
     throw 'Failed to start backend test process.'
 }
 
-$stdout = $process.StandardOutput.ReadToEnd()
-$stderr = $process.StandardError.ReadToEnd()
-$process.WaitForExit()
+$stdout = if (Test-Path $stdoutLogPath) { Get-Content -Raw -Path $stdoutLogPath } else { '' }
+$stderr = if (Test-Path $stderrLogPath) { Get-Content -Raw -Path $stderrLogPath } else { '' }
 
-Set-Content -Path $stdoutLogPath -Value $stdout -Encoding UTF8
-Set-Content -Path $stderrLogPath -Value $stderr -Encoding UTF8
+Try-RewriteUtf8Log -Path $stdoutLogPath -Content $stdout
+Try-RewriteUtf8Log -Path $stderrLogPath -Content $stderr
 
 if ($stdout) {
     Write-Host $stdout

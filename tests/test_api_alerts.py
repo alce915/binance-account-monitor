@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 import monitor_app.api as api_module
+from monitor_app.access_control.service import AccessControlService
+from monitor_app.config import settings
 
 
 class FakeAlertMonitor:
@@ -27,10 +32,32 @@ class FakeAlertMonitor:
         return {"triggered": len(updates), "updates": updates}
 
 
-def test_post_telegram_test_endpoint_returns_queue_result_and_stats() -> None:
+def _build_disabled_access_control(tmp_path: Path) -> AccessControlService:
+    config_path = tmp_path / "access_control.json"
+    audit_db_path = tmp_path / "access_audit.db"
+    config_path.write_text(
+        json.dumps(
+            {
+                "enabled": False,
+                "whitelist_ips": [],
+                "allow_plaintext_secrets": True,
+                "cookie_secure_mode": "auto",
+                "guest_password": "guest-pass",
+                "admin_password": "admin-pass",
+                "session_secret": "dev-session-secret-1234567890",
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return AccessControlService(settings, config_path=config_path, audit_db_path=audit_db_path)
+
+
+def test_post_telegram_test_endpoint_returns_queue_result_and_stats(tmp_path: Path) -> None:
     with TestClient(api_module.app) as client:
-        client.app.state.allow_test_non_loopback = True
         client.app.state.monitor = FakeAlertMonitor()
+        client.app.state.access_control = _build_disabled_access_control(tmp_path)
         response = client.post("/api/alerts/telegram/test", json={"message": "hello tg"})
 
     assert response.status_code == 200
@@ -40,10 +67,10 @@ def test_post_telegram_test_endpoint_returns_queue_result_and_stats() -> None:
     assert payload["stats"]["enabled"] is True
 
 
-def test_get_unimmr_alert_status_returns_summary() -> None:
+def test_get_unimmr_alert_status_returns_summary(tmp_path: Path) -> None:
     with TestClient(api_module.app) as client:
-        client.app.state.allow_test_non_loopback = True
         client.app.state.monitor = FakeAlertMonitor()
+        client.app.state.access_control = _build_disabled_access_control(tmp_path)
         response = client.get("/api/alerts/unimmr/status")
 
     assert response.status_code == 200
@@ -52,10 +79,10 @@ def test_get_unimmr_alert_status_returns_summary() -> None:
     assert payload["accounts"][0]["account_id"] == "group_a.sub1"
 
 
-def test_post_unimmr_simulate_endpoint_returns_result_and_stats() -> None:
+def test_post_unimmr_simulate_endpoint_returns_result_and_stats(tmp_path: Path) -> None:
     with TestClient(api_module.app) as client:
-        client.app.state.allow_test_non_loopback = True
         client.app.state.monitor = FakeAlertMonitor()
+        client.app.state.access_control = _build_disabled_access_control(tmp_path)
         response = client.post(
             "/api/alerts/unimmr/simulate",
             json={"updates": [{"account_id": "group_a.sub1", "uni_mmr": "1.18"}]},

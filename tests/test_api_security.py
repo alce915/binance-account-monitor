@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-import httpx
-import pytest
+import json
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 import monitor_app.api as api_module
-from monitor_app.security import is_trusted_loopback_host
+from monitor_app.access_control.service import AccessControlService
+from monitor_app.config import settings
 
 
 class FakeMonitor:
@@ -58,31 +60,46 @@ class FakeMonitor:
         }
 
 
-def test_docs_endpoints_are_disabled() -> None:
+def _build_disabled_access_control(tmp_path: Path) -> AccessControlService:
+    config_path = tmp_path / "access_control.json"
+    audit_db_path = tmp_path / "access_audit.db"
+    config_path.write_text(
+        json.dumps(
+            {
+                "enabled": False,
+                "whitelist_ips": [],
+                "allow_plaintext_secrets": True,
+                "cookie_secure_mode": "auto",
+                "guest_password": "guest-pass",
+                "admin_password": "admin-pass",
+                "session_secret": "dev-session-secret-1234567890",
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return AccessControlService(settings, config_path=config_path, audit_db_path=audit_db_path)
+
+
+def test_docs_endpoints_are_disabled(tmp_path: Path) -> None:
     with TestClient(api_module.app) as client:
-        client.app.state.allow_test_non_loopback = True
-        assert client.get("/docs").status_code == 404
-        assert client.get("/redoc").status_code == 404
-        assert client.get("/openapi.json").status_code == 404
+        access_control = _build_disabled_access_control(tmp_path)
+        api_module.app.state.access_control = access_control
+        client.app.state.access_control = access_control
+        assert client.get("/docs", follow_redirects=False).status_code == 404
+        assert client.get("/redoc", follow_redirects=False).status_code == 404
+        assert client.get("/openapi.json", follow_redirects=False).status_code == 404
 
 
-@pytest.mark.asyncio
-async def test_loopback_guard_rejects_non_loopback_client() -> None:
-    transport = httpx.ASGITransport(app=api_module.app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://localhost") as client:
-        response = await client.get("/healthz", headers={"host": "198.51.100.10"})
-
-    assert response.status_code in {400, 403}
-
-
-def test_trusted_loopback_host_accepts_ipv6_host_with_port() -> None:
-    assert is_trusted_loopback_host("[::1]:8010") is True
-
-
-def test_monitor_groups_response_is_sanitized_for_public_clients() -> None:
+def test_monitor_groups_response_is_sanitized_for_public_clients(tmp_path: Path) -> None:
     with TestClient(api_module.app) as client:
-        client.app.state.allow_test_non_loopback = True
-        client.app.state.monitor = FakeMonitor()
+        access_control = _build_disabled_access_control(tmp_path)
+        monitor = FakeMonitor()
+        api_module.app.state.access_control = access_control
+        api_module.app.state.monitor = monitor
+        client.app.state.access_control = access_control
+        client.app.state.monitor = monitor
         response = client.get("/api/monitor/groups")
 
     assert response.status_code == 200
@@ -101,10 +118,14 @@ def test_monitor_groups_response_is_sanitized_for_public_clients() -> None:
     assert "[redacted-email]" in account["message"]
 
 
-def test_monitor_refresh_response_strips_internal_diagnostics() -> None:
+def test_monitor_refresh_response_strips_internal_diagnostics(tmp_path: Path) -> None:
     with TestClient(api_module.app) as client:
-        client.app.state.allow_test_non_loopback = True
-        client.app.state.monitor = FakeMonitor()
+        access_control = _build_disabled_access_control(tmp_path)
+        monitor = FakeMonitor()
+        api_module.app.state.access_control = access_control
+        api_module.app.state.monitor = monitor
+        client.app.state.access_control = access_control
+        client.app.state.monitor = monitor
         response = client.post("/api/monitor/refresh")
 
     assert response.status_code == 200

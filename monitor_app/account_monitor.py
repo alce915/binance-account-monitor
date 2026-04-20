@@ -20,6 +20,7 @@ from monitor_app.i18n import (
     monitor_accounts_reloaded_message,
     monitoring_disabled_message,
     no_accounts_available_message,
+    profit_summary_labels,
     refresh_completed_message,
     refresh_failed_message,
     refresh_timeout_message,
@@ -280,6 +281,9 @@ class AccountMonitorController:
 
     async def send_test_telegram_notification(self, message: str | None = None) -> dict[str, Any]:
         return await self._unimmr_alerts.send_test_notification(message)
+
+    def reload_telegram_credentials(self) -> None:
+        self._telegram_notifications.reload_credentials()
 
     async def unimmr_alert_status(self) -> dict[str, Any]:
         return await self._unimmr_alerts.status_summary(monitor_enabled=self._monitor_enabled)
@@ -783,6 +787,7 @@ class AccountMonitorController:
         summary: dict[str, Any],
     ) -> dict[str, Any]:
         aggregated = self._empty_distribution_profit_summary()
+        labels = profit_summary_labels()
         for key in ("today", "week", "month", "year", "all"):
             aggregated[key]["complete"] = True
         equity = Decimal(str(summary.get("equity") or "0"))
@@ -792,6 +797,18 @@ class AccountMonitorController:
                 continue
             has_successful_accounts = True
             account_profit_summary = account.get("distribution_profit_summary") or {}
+            for key, label in labels.items():
+                period = account_profit_summary.get(key) or {}
+                amount = Decimal(str(period.get("amount") or "0"))
+                aggregated[key]["label"] = label
+                aggregated[key]["amount"] += amount
+                aggregated[key]["complete"] = aggregated[key]["complete"] and bool(period.get("complete"))
+                period_start_at = period.get("start_at")
+                if aggregated[key]["start_at"] is None:
+                    aggregated[key]["start_at"] = period_start_at
+                elif key == "all" and period_start_at is not None:
+                    aggregated[key]["start_at"] = min(str(aggregated[key]["start_at"]), str(period_start_at))
+            continue
             for key, label in (
                 ("today", "今日收益丨收益率"),
                 ("week", "本周收益丨收益率"),
@@ -839,6 +856,16 @@ class AccountMonitorController:
                 "start_at": None,
                 "complete": False,
             }
+
+        labels = profit_summary_labels()
+        return {
+            "today": _period(labels["today"]),
+            "week": _period(labels["week"]),
+            "month": _period(labels["month"]),
+            "year": _period(labels["year"]),
+            "all": _period(labels["all"]),
+            "backfill_complete": False,
+        }
 
         return {
             "today": _period("今日收益丨收益率"),

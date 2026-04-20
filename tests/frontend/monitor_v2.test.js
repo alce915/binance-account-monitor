@@ -176,6 +176,48 @@ afterEach(() => {
 });
 
 describe('monitor_v2.js', () => {
+  it('disables write controls for guest sessions after bootstrap', async () => {
+    const app = createApp();
+    apps.push(app);
+    app.api.resetTestState();
+
+    app.window.fetch = vi.fn(async (input) => {
+      const path = new URL(String(input), 'http://127.0.0.1:8010').pathname;
+      if (path === '/api/auth/session') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            enabled: true,
+            initialized: true,
+            authenticated: true,
+            whitelisted: false,
+            role: 'guest',
+            auth_source: 'session',
+            csrf_token: 'csrf-test-only',
+            last_activity_at: '2026-04-19T12:00:00+08:00',
+          }),
+        };
+      }
+      if (path === '/api/monitor/groups') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => basePayload(),
+        };
+      }
+      throw new Error(`Unexpected fetch: ${path}`);
+    });
+
+    await app.api.bootstrap();
+
+    expect(app.document.getElementById('authRoleBadge').textContent).toContain('游客');
+    expect(app.document.getElementById('refreshButton').disabled).toBe(true);
+    expect(app.document.getElementById('importButton').disabled).toBe(true);
+    expect(app.document.getElementById('fundingTransferButton').disabled).toBe(true);
+    expect(app.document.getElementById('logoutButton').hidden).toBe(false);
+  });
+
   it('renders the main view for normal payloads and empty groups', () => {
     const app = createApp();
     apps.push(app);
@@ -735,5 +777,25 @@ describe('monitor_v2.js', () => {
 
     expect(detailDirections).toContain('distribute');
     expect(detailDirections).toContain('collect');
+  });
+
+  it('describes settings-only import without account replacement wording', () => {
+    const app = createApp();
+    apps.push(app);
+    app.api.resetTestState();
+
+    const message = app.api.describeImportResult({
+      import_result: {
+        mode: 'settings_only',
+        main_account_count: 0,
+        account_count: 0,
+        updated_settings_keys: ['telegram.bot_token'],
+      },
+      refresh_result: { success: true },
+      security_notice: '敏感信息已转入加密仓库',
+    });
+
+    expect(message).toContain('已更新 1 项敏感配置');
+    expect(message).not.toContain('已覆盖 0 个分组 / 0 个账户');
   });
 });

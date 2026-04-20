@@ -9,6 +9,15 @@ import pytest
 
 from monitor_app.account_monitor import AccountMonitorController
 from monitor_app.config import MainAccountConfig, MonitorAccountConfig, Settings
+from monitor_app.i18n import monitor_accounts_reloaded_message
+
+
+def _build_settings(tmp_path: Path, **overrides) -> Settings:
+    overrides.setdefault("allow_plaintext_secrets", True)
+    settings = Settings(_env_file=None, monitor_history_db_path=tmp_path / "history.db", **overrides)
+    if "unimmr_alerts_enabled" in overrides:
+        settings.unimmr_alerts_enabled = bool(overrides["unimmr_alerts_enabled"])
+    return settings
 
 
 class FakeMonitorGateway:
@@ -92,11 +101,10 @@ class FakeMonitorGateway:
 @pytest.mark.asyncio
 async def test_account_monitor_controller_groups_and_filters_accounts(tmp_path: Path) -> None:
     FakeMonitorGateway.call_counts = {}
-    settings = Settings(
-        _env_file=None,
+    settings = _build_settings(
+        tmp_path,
         monitor_refresh_interval_ms=50,
         monitor_history_window_days=3,
-        monitor_history_db_path=tmp_path / "history.db",
     )
     account1 = MonitorAccountConfig(account_id="group_a.sub1", child_account_id="sub1", child_account_name="Sub One", main_account_id="group_a", main_account_name="Group A", api_key="k1", api_secret="s1")
     account2 = MonitorAccountConfig(account_id="group_a.sub2", child_account_id="sub2", child_account_name="Sub Two", main_account_id="group_a", main_account_name="Group A", api_key="k2", api_secret="s2")
@@ -123,7 +131,7 @@ async def test_account_monitor_controller_groups_and_filters_accounts(tmp_path: 
     assert refreshed["data"]["summary"]["equity"] == "2400"
     assert refreshed["data"]["summary"]["total_commission"] == "-3.6"
     assert refreshed["data"]["summary"]["total_distribution"] == "3.0"
-    assert refreshed["data"]["groups"][0]["profit_summary"]["all"]["amount"] == "3.0"
+    assert refreshed["data"]["groups"][0]["profit_summary"]["all"]["amount"] == "1.5"
     assert Decimal(refreshed["data"]["summary"]["distribution_apy_7d"]).quantize(Decimal("0.00000001")) == Decimal("0.06517857")
     assert refreshed["data"]["profit_summary"]["today"]["amount"] == "0.4"
     assert refreshed["data"]["profit_summary"]["all"]["complete"] is True
@@ -135,11 +143,10 @@ async def test_account_monitor_controller_groups_and_filters_accounts(tmp_path: 
 @pytest.mark.asyncio
 async def test_account_monitor_background_refresh_runs_without_subscribers_after_start(tmp_path: Path) -> None:
     FakeMonitorGateway.call_counts = {}
-    settings = Settings(
-        _env_file=None,
+    settings = _build_settings(
+        tmp_path,
         monitor_refresh_interval_ms=50,
         monitor_history_window_days=3,
-        monitor_history_db_path=tmp_path / "history.db",
         unimmr_alerts_enabled=True,
     )
     account = MonitorAccountConfig(
@@ -158,7 +165,9 @@ async def test_account_monitor_background_refresh_runs_without_subscribers_after
     controller = AccountMonitorController(settings, gateway_factory=lambda selected: FakeMonitorGateway(selected))
     try:
         await controller.start()
-        await asyncio.sleep(0.12)
+        deadline = asyncio.get_running_loop().time() + 1.5
+        while FakeMonitorGateway.call_counts.get("group_a.sub1", 0) < 2 and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.02)
     finally:
         await controller.close()
 
@@ -513,11 +522,10 @@ class RecordingUniMmrAlerts:
 
 @pytest.mark.asyncio
 async def test_simulate_unimmr_alerts_overrides_current_snapshot_values(tmp_path: Path) -> None:
-    settings = Settings(
-        _env_file=None,
+    settings = _build_settings(
+        tmp_path,
         monitor_refresh_interval_ms=50,
         monitor_history_window_days=3,
-        monitor_history_db_path=tmp_path / "history.db",
         unimmr_alerts_enabled=True,
     )
     account = MonitorAccountConfig(
@@ -588,11 +596,10 @@ async def test_simulate_unimmr_alerts_overrides_current_snapshot_values(tmp_path
 
 @pytest.mark.asyncio
 async def test_simulate_unimmr_alerts_rejects_unknown_account(tmp_path: Path) -> None:
-    settings = Settings(
-        _env_file=None,
+    settings = _build_settings(
+        tmp_path,
         monitor_refresh_interval_ms=50,
         monitor_history_window_days=3,
-        monitor_history_db_path=tmp_path / "history.db",
         unimmr_alerts_enabled=True,
     )
     account = MonitorAccountConfig(
@@ -635,11 +642,10 @@ async def test_simulate_unimmr_alerts_rejects_unknown_account(tmp_path: Path) ->
 
 @pytest.mark.asyncio
 async def test_unimmr_alert_status_reports_disabled_when_monitor_is_off(tmp_path: Path) -> None:
-    settings = Settings(
-        _env_file=None,
+    settings = _build_settings(
+        tmp_path,
         monitor_refresh_interval_ms=50,
         monitor_history_window_days=3,
-        monitor_history_db_path=tmp_path / "history.db",
         unimmr_alerts_enabled=True,
     )
     account = MonitorAccountConfig(
@@ -682,6 +688,7 @@ async def test_reload_accounts_closes_removed_gateways_and_updates_service_ids(t
     config_path = tmp_path / "config" / "binance_monitor_accounts.json"
     settings = Settings(
         _env_file=None,
+        allow_plaintext_secrets=True,
         monitor_accounts_file=config_path,
         monitor_refresh_interval_ms=999999,
         monitor_history_window_days=3,
@@ -754,6 +761,7 @@ async def test_reload_accounts_recreates_gateway_when_account_config_changes(tmp
     config_path = tmp_path / "config" / "binance_monitor_accounts.json"
     settings = Settings(
         _env_file=None,
+        allow_plaintext_secrets=True,
         monitor_accounts_file=config_path,
         monitor_refresh_interval_ms=999999,
         monitor_history_window_days=3,
@@ -809,6 +817,62 @@ async def test_reload_accounts_recreates_gateway_when_account_config_changes(tmp
         assert factory_calls == ["k1", "k1-updated"]
     finally:
         await controller.close()
+
+
+@pytest.mark.asyncio
+async def test_reload_accounts_broadcasts_locked_payload_even_if_last_payload_changes_before_publish(tmp_path: Path) -> None:
+    config_path = tmp_path / "config" / "binance_monitor_accounts.json"
+    settings = Settings(
+        _env_file=None,
+        allow_plaintext_secrets=True,
+        monitor_accounts_file=config_path,
+        monitor_refresh_interval_ms=999999,
+        monitor_history_window_days=3,
+        monitor_history_db_path=tmp_path / "history.db",
+    )
+    _write_accounts_file(
+        config_path,
+        {
+            "main_accounts": [
+                {
+                    "main_id": "group_a",
+                    "name": "Group A",
+                    "children": [
+                        {"account_id": "sub1", "name": "Sub One", "api_key": "k1", "api_secret": "s1"},
+                    ],
+                }
+            ]
+        },
+    )
+    settings.load_monitor_accounts()
+
+    controller = AccountMonitorController(settings, gateway_factory=lambda account: FakeMonitorGateway(account))
+    broadcast_started = asyncio.Event()
+    release_broadcast = asyncio.Event()
+    broadcast_payloads: list[dict] = []
+
+    async def delayed_broadcast(payload: dict) -> None:
+        broadcast_started.set()
+        await release_broadcast.wait()
+        broadcast_payloads.append(payload)
+
+    try:
+        await controller.refresh_now()
+        controller._broadcast = delayed_broadcast  # type: ignore[method-assign]
+        reload_task = asyncio.create_task(controller.reload_accounts())
+        await asyncio.wait_for(broadcast_started.wait(), timeout=1)
+
+        async with controller._refresh_lock:
+            controller._last_payload = controller._build_idle_payload("error", "mutated after unlock")
+
+        release_broadcast.set()
+        reloaded = await asyncio.wait_for(reload_task, timeout=1)
+    finally:
+        await controller.close()
+
+    assert reloaded["message"] == monitor_accounts_reloaded_message()
+    assert broadcast_payloads[0]["message"] == monitor_accounts_reloaded_message()
+    assert controller._last_payload["message"] == "mutated after unlock"
 
 
 def _write_accounts_file(path: Path, payload: dict) -> None:

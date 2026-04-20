@@ -2,6 +2,8 @@
 const profitCards = document.getElementById('profitCards');
 const groupsContainer = document.getElementById('groupsContainer');
 const connectionBadge = document.getElementById('connectionBadge');
+const authRoleBadge = document.getElementById('authRoleBadge');
+const logoutButton = document.getElementById('logoutButton');
 const messageText = document.getElementById('messageText');
 const updatedAt = document.getElementById('updatedAt');
 const toolbarStats = document.getElementById('toolbarStats');
@@ -101,6 +103,16 @@ let summarySignature = '';
 let profitSummarySignature = '';
 let pendingStreamPayload = null;
 let pendingStreamFrame = null;
+let authSession = {
+  enabled: false,
+  initialized: true,
+  authenticated: true,
+  whitelisted: false,
+  role: 'admin',
+  auth_source: 'disabled',
+  csrf_token: '',
+  last_activity_at: null,
+};
 
 const fmt = (value) => {
   const number = Number(value ?? 0);
@@ -207,25 +219,105 @@ const shortOperationId = (value) => {
   const text = String(value || '').trim();
   return text ? text.slice(0, 8) : '-';
 };
+const authRoleText = (value, authSource) => {
+  if (authSource === 'whitelist') return '白名单管理员';
+  if (authSource === 'disabled') return '开放模式';
+  if (authSource === 'break_glass') return '应急管理员';
+  if (value === 'guest') return '游客模式';
+  return '管理员';
+};
+const canWrite = () => {
+  if (!authSession.enabled) return true;
+  if (authSession.auth_source === 'whitelist' || authSession.auth_source === 'break_glass') return true;
+  return authSession.role === 'admin';
+};
+
+function handleAuthError(response) {
+  if (response.status === 401 && authSession.enabled) {
+    const next = `${window.location.pathname}${window.location.search || ''}`;
+    window.location.replace(`/login?next=${encodeURIComponent(next)}`);
+    return true;
+  }
+  return false;
+}
+
+async function apiFetch(url, options = {}) {
+  const requestOptions = { ...options };
+  const method = String(requestOptions.method || 'GET').toUpperCase();
+  const headers = new Headers(requestOptions.headers || {});
+  if (!headers.has('Cache-Control') && method === 'GET') {
+    requestOptions.cache = requestOptions.cache || 'no-store';
+  }
+  if (method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS' && authSession.csrf_token) {
+    headers.set('X-CSRF-Token', authSession.csrf_token);
+  }
+  requestOptions.headers = headers;
+  const response = await fetch(url, requestOptions);
+  handleAuthError(response);
+  return response;
+}
+
+async function loadAuthSession() {
+  const response = await fetch('/api/auth/session', { cache: 'no-store' });
+  const payload = await response.json();
+  if (response.status === 503 && payload?.error?.code === 'AUTH_NOT_INITIALIZED') {
+    window.location.replace('/login');
+    throw new Error(payload?.error?.message || '认证未初始化');
+  }
+  if (!response.ok) {
+    throw new Error(payload?.error?.message || `HTTP ${response.status}`);
+  }
+  authSession = {
+    enabled: Boolean(payload.enabled),
+    initialized: payload.initialized !== false,
+    authenticated: Boolean(payload.authenticated),
+    whitelisted: Boolean(payload.whitelisted),
+    role: payload.role || (payload.enabled ? '' : 'admin'),
+    auth_source: payload.auth_source || 'disabled',
+    csrf_token: String(payload.csrf_token || ''),
+    last_activity_at: payload.last_activity_at || null,
+  };
+  if (authSession.enabled && !authSession.authenticated) {
+    const next = `${window.location.pathname}${window.location.search || ''}`;
+    window.location.replace(`/login?next=${encodeURIComponent(next)}`);
+    throw new Error('认证已失效');
+  }
+  syncAuthUi();
+  return authSession;
+}
+
+function syncAuthUi() {
+  if (authRoleBadge) {
+    authRoleBadge.textContent = authRoleText(authSession.role, authSession.auth_source);
+  }
+  if (logoutButton) {
+    logoutButton.hidden = !authSession.enabled || authSession.auth_source !== 'session';
+  }
+  applyActionButtonState();
+}
 
 function applyActionButtonState() {
+  const writeAllowed = canWrite();
   refreshButton.textContent = refreshButtonLabel();
-  refreshButton.disabled = importBusy || refreshBusy || toggleBusy || refreshCooldownSeconds > 0;
-  downloadTemplateButton.disabled = importBusy || refreshBusy || toggleBusy;
+  refreshButton.disabled = !writeAllowed || importBusy || refreshBusy || toggleBusy || refreshCooldownSeconds > 0;
+  downloadTemplateButton.disabled = !writeAllowed || importBusy || refreshBusy || toggleBusy;
   importButton.textContent = importBusy ? '导入中' : '导入 Excel';
-  importButton.disabled = importBusy || refreshBusy || toggleBusy;
-  fundingTransferButton.disabled = importBusy || refreshBusy || toggleBusy || currentGroups().length === 0;
-  monitorToggle.disabled = toggleBusy || refreshBusy || importBusy;
+  importButton.disabled = !writeAllowed || importBusy || refreshBusy || toggleBusy;
+  fundingTransferButton.disabled = !writeAllowed || importBusy || refreshBusy || toggleBusy || currentGroups().length === 0;
+  monitorToggle.disabled = !writeAllowed || toggleBusy || refreshBusy || importBusy;
   fundingSubmitButton.disabled = fundingModalBusy;
   if (fundingRefreshButton) {
     fundingRefreshButton.textContent = fundingRefreshButtonLabel();
-    fundingRefreshButton.disabled = fundingModalBusy || fundingRefreshBusy || fundingRefreshCooldownSeconds > 0 || !fundingSelectedGroupId;
+    fundingRefreshButton.disabled = !writeAllowed || fundingModalBusy || fundingRefreshBusy || fundingRefreshCooldownSeconds > 0 || !fundingSelectedGroupId;
   }
   if (fundingQuickCollectButton) {
-    fundingQuickCollectButton.disabled = fundingModalBusy || fundingDirection !== 'collect' || !fundingModeAvailable() || !fundingSelectedAsset;
+    fundingQuickCollectButton.disabled = !writeAllowed || fundingModalBusy || fundingDirection !== 'collect' || !fundingModeAvailable() || !fundingSelectedAsset;
   }
   if (fundingQuickClearButton) {
-    fundingQuickClearButton.disabled = fundingModalBusy || fundingDirection !== 'collect';
+    fundingQuickClearButton.disabled = !writeAllowed || fundingModalBusy || fundingDirection !== 'collect';
+  }
+  if (fundingSubmitButton) {
+    fundingSubmitButton.disabled = !writeAllowed || fundingModalBusy;
   }
   syncFundingAmountToggleState();
   syncFundingSelectAllState();
@@ -712,7 +804,7 @@ async function loadFundingAuditDetail(mainAccountId, operationId, direction = ''
   }
   try {
     const query = new URLSearchParams({ direction: normalizedDirection }).toString();
-    const response = await fetch(
+    const response = await apiFetch(
       `/api/funding/groups/${encodeURIComponent(mainAccountId)}/audit/${encodeURIComponent(normalizedOperationId)}?${query}`,
       { cache: 'no-store' },
     );
@@ -744,7 +836,7 @@ async function loadFundingAudit(mainAccountId, { preserveOnError = true } = {}) 
   fundingAuditBusy = true;
   applyActionButtonState();
   try {
-    const response = await fetch(`/api/funding/groups/${encodeURIComponent(mainAccountId)}/audit`, { cache: 'no-store' });
+    const response = await apiFetch(`/api/funding/groups/${encodeURIComponent(mainAccountId)}/audit`, { cache: 'no-store' });
     const payload = await response.json();
     if (!response.ok) {
       throw new Error(payload.detail || `HTTP ${response.status}`);
@@ -1104,7 +1196,7 @@ async function loadFundingOverview(mainAccountId, { resetState = false, preserve
   fundingModalBusy = true;
   applyActionButtonState();
   try {
-    const response = await fetch(`/api/funding/groups/${encodeURIComponent(mainAccountId)}`, { cache: 'no-store' });
+    const response = await apiFetch(`/api/funding/groups/${encodeURIComponent(mainAccountId)}`, { cache: 'no-store' });
     const payload = await response.json();
     if (!response.ok) {
       throw new Error(payload.detail || `HTTP ${response.status}`);
@@ -1169,7 +1261,7 @@ function closeFundingModal() {
 
 async function refreshMonitorAfterFundingOperation() {
   try {
-    const response = await fetch('/api/monitor/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+    const response = await apiFetch('/api/monitor/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
     const payload = await response.json();
     if (!response.ok) {
       throw new Error(payload.detail || `HTTP ${response.status}`);
@@ -1305,7 +1397,7 @@ async function submitFundingOperation() {
       ? { asset: fundingSelectedAsset, operation_id: operationId, transfers: selectedRows }
       : { asset: fundingSelectedAsset, operation_id: operationId, transfers: selectedRows };
 
-    const response = await fetch(endpoint, {
+    const response = await apiFetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestBody),
@@ -1834,7 +1926,7 @@ async function setMonitorEnabled(enabled) {
   toggleBusy = true;
   applyActionButtonState();
   try {
-    const response = await fetch('/api/monitor/control', {
+    const response = await apiFetch('/api/monitor/control', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled }),
@@ -1861,7 +1953,7 @@ async function refreshNow() {
   const refreshStartedAt = Date.now();
   messageText.textContent = '正在刷新，当前数据保持不变，等待新数据返回后自动更新';
   try {
-    const response = await fetch('/api/monitor/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+    const response = await apiFetch('/api/monitor/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
     render(payload);
@@ -1879,9 +1971,18 @@ function describeImportResult(payload = {}) {
   const result = payload.import_result || {};
   const groupCount = fmtCount(result.main_account_count || 0);
   const accountCount = fmtCount(result.account_count || 0);
-  return payload.refresh_result?.success === false
-    ? `Excel 导入成功，已覆盖 ${groupCount} 个分组 / ${accountCount} 个账户，但刷新失败：${payload.refresh_result.message || '-'}`
-    : `Excel 导入成功，已覆盖 ${groupCount} 个分组 / ${accountCount} 个账户`;
+  const settingsOnly = result.mode === 'settings_only';
+  const updatedSettingsCount = Array.isArray(result.updated_settings_keys) ? result.updated_settings_keys.length : 0;
+  const updatedSettings = !settingsOnly && Array.isArray(result.updated_settings_keys) && result.updated_settings_keys.length > 0
+    ? `；已更新 ${fmtCount(result.updated_settings_keys.length)} 项敏感配置`
+    : '';
+  const securityNotice = payload.security_notice ? `；${payload.security_notice}` : '';
+  const baseMessage = settingsOnly
+    ? `Excel 导入成功，已更新 ${fmtCount(updatedSettingsCount)} 项敏感配置`
+    : payload.refresh_result?.success === false
+      ? `Excel 导入成功，已覆盖 ${groupCount} 个分组 / ${accountCount} 个账户，但刷新失败：${payload.refresh_result.message || '-'}`
+      : `Excel 导入成功，已覆盖 ${groupCount} 个分组 / ${accountCount} 个账户`;
+  return `${baseMessage}${updatedSettings}${securityNotice}`;
 }
 
 function parseDownloadFilename(contentDisposition) {
@@ -1894,7 +1995,7 @@ async function downloadTemplate() {
   if (importBusy || refreshBusy || toggleBusy) return;
   messageText.textContent = '正在下载 Excel 模板';
   try {
-    const response = await fetch('/api/config/import/excel-template', { method: 'GET', cache: 'no-store' });
+    const response = await apiFetch('/api/config/import/excel-template', { method: 'GET', cache: 'no-store' });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const blob = await response.blob();
     const filename = parseDownloadFilename(response.headers.get('content-disposition'));
@@ -1920,7 +2021,7 @@ async function uploadExcel(file) {
   try {
     const formData = new FormData();
     formData.append('file', file);
-    const response = await fetch('/api/config/import/excel', { method: 'POST', body: formData });
+    const response = await apiFetch('/api/config/import/excel', { method: 'POST', body: formData });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.detail || payload.message || `HTTP ${response.status}`);
     render(payload);
@@ -1936,7 +2037,8 @@ async function uploadExcel(file) {
 
 async function bootstrap() {
   try {
-    const response = await fetch(groupsUrl, { cache: 'no-store' });
+    await loadAuthSession();
+    const response = await apiFetch(groupsUrl, { cache: 'no-store' });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
     render(payload);
@@ -1956,6 +2058,18 @@ async function bootstrap() {
   downloadTemplateButton.addEventListener('click', downloadTemplate);
   importButton.addEventListener('click', () => {
     if (!importBusy && !refreshBusy) importInput.click();
+  });
+  logoutButton?.addEventListener('click', async () => {
+    try {
+      const response = await apiFetch('/api/auth/logout', { method: 'POST' });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+    } catch (error) {
+      messageText.textContent = `退出登录失败：${error}`;
+      return;
+    }
+    window.location.replace('/login');
   });
   importInput.addEventListener('change', () => {
     const file = importInput.files?.[0];
@@ -2208,6 +2322,7 @@ window.__monitorV2 = {
     fundingPendingOperationId = String(value || '');
     renderFundingOperationMeta();
   },
+  describeImportResult,
 };
 
 applyActionButtonState();

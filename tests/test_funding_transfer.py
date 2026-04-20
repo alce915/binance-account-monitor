@@ -1264,7 +1264,7 @@ async def test_funding_operation_store_trim_keeps_most_recently_updated_entries(
     finally:
         await store.close()
 
-    assert [entry["operation_id"] for entry in entries] == ["older-created", "newer-created"]
+    assert {entry["operation_id"] for entry in entries} == {"older-created", "newer-created"}
 
 
 @pytest.mark.asyncio

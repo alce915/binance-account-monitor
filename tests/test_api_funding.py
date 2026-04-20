@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 import monitor_app.api as api_module
+from monitor_app.access_control.service import AccessControlService
+from monitor_app.config import settings
 from monitor_app.funding_transfer import FundingTransferRequestRejected
 
 
@@ -208,9 +213,31 @@ class FakeFundingService:
         }
 
 
-def test_get_funding_group_endpoint_returns_overview() -> None:
+def _build_disabled_access_control(tmp_path: Path) -> AccessControlService:
+    config_path = tmp_path / "access_control.json"
+    audit_db_path = tmp_path / "access_audit.db"
+    config_path.write_text(
+        json.dumps(
+            {
+                "enabled": False,
+                "whitelist_ips": [],
+                "allow_plaintext_secrets": True,
+                "cookie_secure_mode": "auto",
+                "guest_password": "guest-pass",
+                "admin_password": "admin-pass",
+                "session_secret": "dev-session-secret-1234567890",
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return AccessControlService(settings, config_path=config_path, audit_db_path=audit_db_path)
+
+
+def test_get_funding_group_endpoint_returns_overview(tmp_path: Path) -> None:
     with TestClient(api_module.app) as client:
-        client.app.state.allow_test_non_loopback = True
+        client.app.state.access_control = _build_disabled_access_control(tmp_path)
         client.app.state.funding_transfer = FakeFundingService()
         response = client.get("/api/funding/groups/group_a")
 
@@ -232,9 +259,9 @@ def test_get_funding_group_endpoint_returns_overview() -> None:
     assert "[redacted]" in payload["children"][0]["reason_distribute"]
 
 
-def test_distribute_group_funding_endpoint_returns_operation_result_and_header() -> None:
+def test_distribute_group_funding_endpoint_returns_operation_result_and_header(tmp_path: Path) -> None:
     with TestClient(api_module.app) as client:
-        client.app.state.allow_test_non_loopback = True
+        client.app.state.access_control = _build_disabled_access_control(tmp_path)
         client.app.state.funding_transfer = FakeFundingService()
         response = client.post(
             "/api/funding/groups/group_a/distribute",
@@ -255,9 +282,9 @@ def test_distribute_group_funding_endpoint_returns_operation_result_and_header()
     assert "error_context" not in payload
 
 
-def test_collect_group_funding_endpoint_returns_operation_result() -> None:
+def test_collect_group_funding_endpoint_returns_operation_result(tmp_path: Path) -> None:
     with TestClient(api_module.app) as client:
-        client.app.state.allow_test_non_loopback = True
+        client.app.state.access_control = _build_disabled_access_control(tmp_path)
         client.app.state.funding_transfer = FakeFundingService()
         response = client.post(
             "/api/funding/groups/group_a/collect",
@@ -275,9 +302,9 @@ def test_collect_group_funding_endpoint_returns_operation_result() -> None:
     assert payload["overview"]["children"][0]["uid"] == "2234***89"
 
 
-def test_collect_group_funding_endpoint_accepts_legacy_account_ids_payload() -> None:
+def test_collect_group_funding_endpoint_accepts_legacy_account_ids_payload(tmp_path: Path) -> None:
     with TestClient(api_module.app) as client:
-        client.app.state.allow_test_non_loopback = True
+        client.app.state.access_control = _build_disabled_access_control(tmp_path)
         client.app.state.funding_transfer = FakeFundingService()
         response = client.post(
             "/api/funding/groups/group_a/collect",
@@ -290,9 +317,9 @@ def test_collect_group_funding_endpoint_accepts_legacy_account_ids_payload() -> 
     assert payload["results"][0]["account_id"] == "group_a.sub1"
 
 
-def test_get_funding_group_audit_endpoint_returns_sanitized_summary_entries() -> None:
+def test_get_funding_group_audit_endpoint_returns_sanitized_summary_entries(tmp_path: Path) -> None:
     with TestClient(api_module.app) as client:
-        client.app.state.allow_test_non_loopback = True
+        client.app.state.access_control = _build_disabled_access_control(tmp_path)
         client.app.state.funding_transfer = FakeFundingService()
         response = client.get("/api/funding/groups/group_a/audit")
 
@@ -303,9 +330,9 @@ def test_get_funding_group_audit_endpoint_returns_sanitized_summary_entries() ->
     assert "results" not in payload["entries"][0]
 
 
-def test_get_funding_group_audit_detail_endpoint_returns_sanitized_detail() -> None:
+def test_get_funding_group_audit_detail_endpoint_returns_sanitized_detail(tmp_path: Path) -> None:
     with TestClient(api_module.app) as client:
-        client.app.state.allow_test_non_loopback = True
+        client.app.state.access_control = _build_disabled_access_control(tmp_path)
         client.app.state.funding_transfer = FakeFundingService()
         response = client.get("/api/funding/groups/group_a/audit/op-12345678?direction=distribute")
 
@@ -317,18 +344,18 @@ def test_get_funding_group_audit_detail_endpoint_returns_sanitized_detail() -> N
     assert "223456789" not in str(payload)
 
 
-def test_get_funding_group_audit_detail_endpoint_requires_direction() -> None:
+def test_get_funding_group_audit_detail_endpoint_requires_direction(tmp_path: Path) -> None:
     with TestClient(api_module.app) as client:
-        client.app.state.allow_test_non_loopback = True
+        client.app.state.access_control = _build_disabled_access_control(tmp_path)
         client.app.state.funding_transfer = FakeFundingService()
         response = client.get("/api/funding/groups/group_a/audit/op-12345678")
 
     assert response.status_code == 422
 
 
-def test_funding_write_endpoint_returns_structured_error_for_missing_operation_id() -> None:
+def test_funding_write_endpoint_returns_structured_error_for_missing_operation_id(tmp_path: Path) -> None:
     with TestClient(api_module.app) as client:
-        client.app.state.allow_test_non_loopback = True
+        client.app.state.access_control = _build_disabled_access_control(tmp_path)
         client.app.state.funding_transfer = FakeFundingService()
         response = client.post(
             "/api/funding/groups/group_a/distribute",
@@ -341,7 +368,7 @@ def test_funding_write_endpoint_returns_structured_error_for_missing_operation_i
     assert payload["error"]["code"] == "OPERATION_ID_REQUIRED"
 
 
-def test_distribute_group_funding_endpoint_preserves_main_email_map_error_code() -> None:
+def test_distribute_group_funding_endpoint_preserves_main_email_map_error_code(tmp_path: Path) -> None:
     class EmailMapFailureService(FakeFundingService):
         async def distribute(self, main_id: str, *, asset: str, operation_id: str, transfers: list[dict]) -> dict:
             raise FundingTransferRequestRejected(
@@ -351,7 +378,7 @@ def test_distribute_group_funding_endpoint_preserves_main_email_map_error_code()
             )
 
     with TestClient(api_module.app) as client:
-        client.app.state.allow_test_non_loopback = True
+        client.app.state.access_control = _build_disabled_access_control(tmp_path)
         client.app.state.funding_transfer = EmailMapFailureService()
         response = client.post(
             "/api/funding/groups/group_a/distribute",
@@ -366,7 +393,7 @@ def test_distribute_group_funding_endpoint_preserves_main_email_map_error_code()
     assert payload["error"]["operation_id"] == "op-email-map-fail"
 
 
-def test_distribute_group_funding_endpoint_preserves_main_spot_query_error_code() -> None:
+def test_distribute_group_funding_endpoint_preserves_main_spot_query_error_code(tmp_path: Path) -> None:
     class MainSpotFailureService(FakeFundingService):
         async def distribute(self, main_id: str, *, asset: str, operation_id: str, transfers: list[dict]) -> dict:
             raise FundingTransferRequestRejected(
@@ -376,7 +403,7 @@ def test_distribute_group_funding_endpoint_preserves_main_spot_query_error_code(
             )
 
     with TestClient(api_module.app) as client:
-        client.app.state.allow_test_non_loopback = True
+        client.app.state.access_control = _build_disabled_access_control(tmp_path)
         client.app.state.funding_transfer = MainSpotFailureService()
         response = client.post(
             "/api/funding/groups/group_a/distribute",
