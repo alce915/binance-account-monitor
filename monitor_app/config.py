@@ -263,7 +263,7 @@ class Settings(BaseSettings):
     monitor_master_key: str = ""
     monitor_master_key_file: str = ""
     env_file_path: Path = Path(".env")
-    admin_idle_timeout_minutes: int = 30
+    admin_idle_timeout_minutes: int = 120
     guest_idle_timeout_minutes: int = 120
     unimmr_alerts_enabled: bool = Field(
         default=False,
