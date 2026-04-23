@@ -859,6 +859,37 @@ describe('monitor_v2.js', () => {
     expect(text).not.toContain('223456789');
   });
 
+  it('caps the funding account list to five visible rows and enables internal scrolling when more sub-accounts are present', () => {
+    const app = createApp();
+    apps.push(app);
+    app.api.resetTestState();
+    app.api.setLatestPayload(basePayload());
+    app.api.setFundingSelectedGroupId('group_a');
+    app.api.setFundingSelectedAsset('BNB');
+    app.api.setFundingOverview(baseFundingOverview({
+      children: Array.from({ length: 7 }, (_, index) => ({
+        account_id: `group_a.sub${index + 1}`,
+        child_account_id: `sub${index + 1}`,
+        name: `Sub ${index + 1}`,
+        uid: `22345678${index}`,
+        can_distribute: true,
+        can_collect: true,
+        reason_distribute: '',
+        reason_collect: '',
+        reason: '',
+        spot_assets: [{ asset: 'BNB', free: '1', locked: '0', total: '1' }],
+        spot_available: { BNB: '1' },
+        funding_assets: [{ asset: 'BNB', free: '1', locked: '0', total: '1' }],
+        funding_available: { BNB: '1' },
+      })),
+    }));
+    app.api.renderFundingModal();
+
+    const listBody = app.document.querySelector('.funding-list-body');
+    expect(listBody?.className).toContain('is-scrollable');
+    expect(listBody?.style.getPropertyValue('--funding-list-max-height')).toBe('418px');
+  });
+
   it('disables submit when write protection is enabled by backend', () => {
     const app = createApp();
     apps.push(app);

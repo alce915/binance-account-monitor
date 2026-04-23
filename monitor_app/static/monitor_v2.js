@@ -24,6 +24,7 @@ const fundingSelectAllCheckbox = document.getElementById('fundingSelectAllCheckb
 const fundingSyncAmountCheckbox = document.getElementById('fundingSyncAmountCheckbox');
 const fundingMainSummary = document.getElementById('fundingMainSummary');
 const fundingRows = document.getElementById('fundingRows');
+const fundingListBody = fundingModalShell?.querySelector('.funding-list-body') || null;
 const fundingQuickActions = document.getElementById('fundingQuickActions');
 const fundingQuickCollectButton = document.getElementById('fundingQuickCollectButton');
 const fundingQuickClearButton = document.getElementById('fundingQuickClearButton');
@@ -1150,6 +1151,37 @@ function renderFundingMainSummary() {
   `;
 }
 
+function fundingDataRows() {
+  if (!fundingRows) return [];
+  return Array.from(fundingRows.querySelectorAll('tr')).filter((row) => {
+    if (row.classList.contains('funding-table-spacer')) return false;
+    return !row.querySelector('.empty');
+  });
+}
+
+function syncFundingListBodyHeight() {
+  if (!fundingListBody) return;
+  const rows = fundingDataRows();
+  if (!rows.length) {
+    fundingListBody.style.removeProperty('--funding-list-max-height');
+    fundingListBody.classList.remove('is-scrollable');
+    return;
+  }
+
+  const tableHead = fundingListBody.querySelector('.funding-table thead');
+  const measuredHeaderHeight = Math.ceil(tableHead?.getBoundingClientRect().height || tableHead?.offsetHeight || 0);
+  const visibleRows = rows.slice(0, 5);
+  const measuredRowsHeight = visibleRows.reduce((total, row) => {
+    const rowHeight = Math.ceil(row.getBoundingClientRect().height || row.offsetHeight || 0);
+    return total + Math.max(rowHeight, 72);
+  }, 0);
+  const headerHeight = Math.max(measuredHeaderHeight, 56);
+  const targetHeight = headerHeight + measuredRowsHeight + 2;
+
+  fundingListBody.style.setProperty('--funding-list-max-height', `${targetHeight}px`);
+  fundingListBody.classList.toggle('is-scrollable', rows.length > visibleRows.length);
+}
+
 function renderFundingRows() {
   const rows = Array.isArray(fundingOverview?.children) ? fundingOverview.children : [];
   const distributeMode = fundingDirection === 'distribute';
@@ -1182,6 +1214,7 @@ function renderFundingRows() {
   }).join('')}` : '<tr><td colspan="6" class="empty">当前分组暂无可操作子账号</td></tr>';
   syncFundingAmountToggleState();
   syncFundingSelectAllState();
+  syncFundingListBodyHeight();
 }
 
 function renderFundingModal() {
@@ -1206,6 +1239,7 @@ function renderFundingModal() {
     fundingSubmitButton.disabled = true;
     renderFundingOperationMeta();
     renderFundingLogPanel();
+    syncFundingListBodyHeight();
     return;
   }
 
@@ -2019,6 +2053,10 @@ function resetMonitorV2TestState() {
   if (toolbarStats) toolbarStats.innerHTML = '';
   if (messageText) messageText.textContent = '';
   if (updatedAt) updatedAt.textContent = '-';
+  if (fundingListBody) {
+    fundingListBody.style.removeProperty('--funding-list-max-height');
+    fundingListBody.classList.remove('is-scrollable');
+  }
 
   renderFundingLogPanel();
   renderFundingOperationMeta();
@@ -2464,3 +2502,5 @@ renderFundingLogPanel();
 if (!TEST_MODE) {
   bootstrap();
 }
+
+window.addEventListener('resize', syncFundingListBodyHeight);
