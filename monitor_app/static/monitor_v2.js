@@ -63,7 +63,12 @@ const messageTextMap = {
   'Monitor accounts reloaded': '监控账户配置已重载',
   'Refresh completed': '刷新完成',
 };
-const accountStatusTextMap = { NORMAL: '正常' };
+const accountStatusTextMap = {
+  NORMAL: '正常',
+  ERROR: '异常',
+  ABNORMAL: '异常',
+  DISABLED: '停用',
+};
 const positionSideTextMap = { LONG: '多', SHORT: '空', BOTH: '双向' };
 const groupTextMap = {
   expandAccounts: '展开子账号',
@@ -128,6 +133,14 @@ const fmt = (value) => {
   return Number.isFinite(number)
     ? number.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
     : String(value ?? '-');
+};
+const fmtCurrency = (value) => {
+  const number = Number(value ?? 0);
+  if (!Number.isFinite(number)) {
+    return String(value ?? '-');
+  }
+  const formatted = Math.abs(number).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return `${number < 0 ? '-' : ''}$${formatted}`;
 };
 const fmtCount = (value) => {
   const number = Number(value ?? 0);
@@ -194,6 +207,25 @@ const statusClass = (status) => {
   if (status === 'error') return 'status-error';
   if (status === 'disabled') return 'status-disabled';
   return '';
+};
+const accountStatusToneClass = (status) => {
+  const normalized = String(status || '').trim().toUpperCase();
+  if (!normalized || normalized === 'NORMAL') return 'account-subtitle-status-ok';
+  return 'account-subtitle-status-error';
+};
+const accountSubtitleStatusText = (account) => {
+  const accountStatus = String(account?.account_status || '').trim();
+  if (accountStatus) {
+    return textAccountStatus(accountStatus);
+  }
+  return textStatus(account?.status);
+};
+const accountSubtitleStatusToneClass = (account) => {
+  const accountStatus = String(account?.account_status || '').trim().toUpperCase();
+  if (accountStatus) {
+    return accountStatusToneClass(accountStatus);
+  }
+  return String(account?.status || '') === 'ok' ? 'account-subtitle-status-ok' : 'account-subtitle-status-error';
 };
 const positionSideTone = (side) => {
   if (side === 'LONG') return 'side-long';
@@ -414,7 +446,8 @@ function renderToolbarStats(summary = {}) {
     { label: '异常账户', value: fmtCount(summary.error_count), tone: 'value-negative' },
   ];
   toolbarStats.innerHTML = stats.map(({ label, value, tone }) => `
-    <div class="stat-pill">
+    <div class="stat-pill toolbar-stat-pill toolbar-stat-pill-refined toolbar-stat-pill-clipped">
+      <span class="toolbar-stat-pill-surface" aria-hidden="true"></span>
       <span class="stat-pill-label">${label}</span>
       <span class="stat-pill-value ${tone}">${value}</span>
     </div>
@@ -434,17 +467,17 @@ function renderSummary(summary = {}) {
   summarySignature = signature;
 
   const cards = [
-    { label: '权益', value: fmt(summary.equity), tone: '' },
-    { label: '保证金', value: fmt(summary.margin), tone: '' },
-    { label: '可用余额', value: fmt(summary.available_balance), tone: '' },
-    { label: '未实现盈亏', value: fmt(summary.unrealized_pnl), tone: numberTone(summary.unrealized_pnl) },
-    { label: '手续费', value: fmt(summary.total_commission), tone: numberTone(summary.total_commission) },
+    { label: '权益', value: fmtCurrency(summary.equity), tone: '' },
+    { label: '保证金', value: fmtCurrency(summary.margin), tone: '' },
+    { label: '可用余额', value: fmtCurrency(summary.available_balance), tone: '' },
+    { label: '未实现盈亏', value: fmtCurrency(summary.unrealized_pnl), tone: numberTone(summary.unrealized_pnl) },
+    { label: '手续费', value: fmtCurrency(summary.total_commission), tone: numberTone(summary.total_commission) },
     { label: '7日年化', value: fmtPercent(summary.distribution_apy_7d), tone: numberTone(summary.distribution_apy_7d) },
   ];
   summaryCards.innerHTML = cards.map(({ label, value, tone }) => `
-    <article class="card">
-      <div class="label">${label}</div>
-      <div class="value ${tone}">${value}</div>
+    <article class="card summary-card summary-card-refined summary-card-proportional metric">
+      <div class="label summary-card-label metric-label metric-label-emphasis">${label}</div>
+      <div class="value summary-card-value metric-value metric-value-proportional ${tone}">${value}</div>
     </article>
   `).join('');
 }
@@ -464,11 +497,11 @@ function renderProfitSummary(profitSummary = {}) {
 
   profitCards.innerHTML = periods.map((period) => {
     const tone = numberTone(period.amount);
-    const note = period.complete ? '' : '<div class="card-note">历史回补中</div>';
+    const note = period.complete ? '' : '<div class="card-note profit-card-note">历史回补中</div>';
     return `
-      <article class="card">
-        <div class="label">${escapeHtml(period.label || '-')}</div>
-        <div class="value ${tone}">${fmt(period.amount)} | ${fmtPercent(period.rate)}</div>
+      <article class="profit-card linked-cell${period.complete ? '' : ' is-incomplete'}">
+        <div class="label profit-card-label linked-label linked-label-emphasis">${escapeHtml(period.label || '-')}</div>
+        <div class="value profit-card-value linked-value ${tone}">${fmtCurrency(period.amount)} | ${fmtPercent(period.rate)}</div>
         ${note}
       </article>
     `;
@@ -700,15 +733,6 @@ function renderFundingAuditPanel() {
   fundingLogLatestTime.textContent = filteredEntries[0]?.time || '--:--:--';
   fundingLogList.innerHTML = `
     <div class="funding-audit-shell">
-      <div class="funding-audit-toolbar">
-        <input
-          class="funding-audit-filter"
-          type="search"
-          data-funding-audit-filter
-          placeholder="按操作ID或资产筛选"
-          value="${escapeHtml(fundingAuditFilter)}"
-        >
-      </div>
       <div class="funding-audit-body">
         <div class="funding-audit-list">
           ${filteredEntries.length ? filteredEntries.map((entry) => `
@@ -1108,9 +1132,9 @@ function renderFundingMainSummary() {
   const mainAccount = fundingOverview?.main_account || {};
   fundingMainSummary.innerHTML = `
     <div class="funding-main-grid">
-      <div class="funding-stat is-identity">
+      <div class="funding-stat funding-identity-card is-identity">
         <div class="funding-identity-head">
-          <div>
+          <div class="funding-identity-content">
             <div class="funding-identity-title">${escapeHtml(fundingOverview?.main_account_name || fundingSelectedGroupId || '-')}</div>
             <div class="funding-identity-meta mono">${escapeHtml(maskUid(mainAccount.uid || '-'))}</div>
           </div>
@@ -1119,9 +1143,9 @@ function renderFundingMainSummary() {
           </div>
         </div>
       </div>
-      <div class="funding-stat"><div class="label">当前代币</div><div class="value">${escapeHtml(fundingSelectedAsset || '-')}</div></div>
-      <div class="funding-stat"><div class="label">主账号现货可用</div><div class="value">${fmt(fundingAssetValue(mainAccount))}</div></div>
-      <div class="funding-stat"><div class="label">归集 API 状态</div><div class="value">${escapeHtml(mainAccount.transfer_ready ? '已配置' : mainAccount.reason || '未配置')}</div></div>
+      <div class="funding-stat"><div class="label funding-stat-label">当前代币</div><div class="value funding-stat-value">${escapeHtml(fundingSelectedAsset || '-')}</div></div>
+      <div class="funding-stat"><div class="label funding-stat-label">主账号现货可用</div><div class="value funding-stat-value">${fmt(fundingAssetValue(mainAccount))}</div></div>
+      <div class="funding-stat"><div class="label funding-stat-label">归集 API 状态</div><div class="value funding-stat-value">${escapeHtml(mainAccount.transfer_ready ? '已配置' : mainAccount.reason || '未配置')}</div></div>
     </div>
   `;
 }
@@ -1155,7 +1179,7 @@ function renderFundingRows() {
         <td class="${eligible ? 'value-positive' : ''}">${escapeHtml(eligible ? '可操作' : reason)}</td>
       </tr>
     `;
-  }).join('')}<tr class="funding-table-spacer" aria-hidden="true"><td colspan="6"></td></tr>` : '<tr><td colspan="6" class="empty">当前分组暂无可操作子账号</td></tr>';
+  }).join('')}` : '<tr><td colspan="6" class="empty">当前分组暂无可操作子账号</td></tr>';
   syncFundingAmountToggleState();
   syncFundingSelectAllState();
 }
@@ -1585,7 +1609,7 @@ function distributionDisplayAmount(summary = {}, profitSummary = null, accounts 
 function renderUniMmrIndicator(account) {
   const value = account?.uni_mmr;
   const toneClass = uniMmrToneClass(value);
-  return `<div class="uni-mmr-indicator${toneClass ? ` ${toneClass}` : ''}">${escapeHtml(groupTextMap.uniMmr)} ${escapeHtml(fmtUniMmr(value))}</div>`;
+  return `<div class="uni-mmr-indicator account-header-pill${toneClass ? ` ${toneClass}` : ''}">${escapeHtml(groupTextMap.uniMmr)} ${escapeHtml(fmtUniMmr(value))}</div>`;
 }
 
 function renderAccount(account) {
@@ -1594,25 +1618,29 @@ function renderAccount(account) {
   return `
     <article class="account">
       <div class="account-head">
-        <div>
+        <div class="account-title-block">
           <h3>${escapeHtml(account.child_account_name || account.account_name || account.account_id || '-')}</h3>
-          <div class="mono">${escapeHtml(account.account_id || '-')} | ${escapeHtml(textAccountStatus(account.account_status))}</div>
+          <div class="mono account-subtitle">
+            <span class="account-subtitle-id">${escapeHtml(account.account_id || '-')}</span>
+            <span class="account-subtitle-divider" aria-hidden="true">|</span>
+            <span class="account-subtitle-status ${accountSubtitleStatusToneClass(account)}">${escapeHtml(accountSubtitleStatusText(account))}</span>
+          </div>
         </div>
         <div class="account-head-actions">
           ${renderUniMmrIndicator(account)}
-          <div class="badge ${statusClass(account.status)}">${escapeHtml(textStatus(account.status))}</div>
+          <div class="badge badge-status-reference status-pill-reference status-pill-scaled status-pill-scale-130 account-header-pill ${statusClass(account.status)}">${escapeHtml(textStatus(account.status))}</div>
         </div>
       </div>
       <div class="account-grid">
         ${[
-          { label: '权益', value: fmt(totals.equity), tone: '' },
-          { label: '保证金', value: fmt(totals.margin), tone: '' },
-          { label: '可用余额', value: fmt(totals.available_balance), tone: '' },
-          { label: '未实现盈亏', value: fmt(totals.unrealized_pnl), tone: numberTone(totals.unrealized_pnl) },
-          { label: '分发收益', value: fmt(distributionAmount), tone: numberTone(distributionAmount) },
+          { label: '权益', value: fmtCurrency(totals.equity), tone: '' },
+          { label: '保证金', value: fmtCurrency(totals.margin), tone: '' },
+          { label: '可用余额', value: fmtCurrency(totals.available_balance), tone: '' },
+          { label: '未实现盈亏', value: fmtCurrency(totals.unrealized_pnl), tone: numberTone(totals.unrealized_pnl) },
+          { label: '分发收益', value: fmtCurrency(distributionAmount), tone: numberTone(distributionAmount) },
           { label: '7日年化', value: fmtPercent(totals.distribution_apy_7d), tone: numberTone(totals.distribution_apy_7d) },
         ].map(({ label, value, tone }) => `
-          <div class="metric"><div class="label">${label}</div><div class="value ${tone}">${value}</div></div>
+          <div class="metric metric-card"><div class="label metric-label">${label}</div><div class="value metric-value ${tone}">${value}</div></div>
         `).join('')}
       </div>
       <div class="section"><h4>持仓</h4>${renderRows(
@@ -1645,9 +1673,10 @@ function renderGroupStatusBadges(summary = {}) {
   const successCount = Number(summary.success_count || 0);
   const errorCount = Number(summary.error_count || 0);
   const badges = [];
-  if (successCount > 0) badges.push(`<div class="badge status-ok">${fmtCount(successCount)} ${escapeHtml(groupTextMap.healthy)}</div>`);
-  if (errorCount > 0) badges.push(`<div class="badge status-error">${fmtCount(errorCount)} 异常</div>`);
-  if (!badges.length) badges.push(`<div class="badge">${fmtCount(summary.account_count || 0)} ${escapeHtml(groupTextMap.accounts)}</div>`);
+  const pillBase = 'badge badge-status-reference status-pill-reference status-pill-scaled status-pill-scale-130 group-header-pill group-status-pill';
+  if (successCount > 0) badges.push(`<div class="${pillBase} status-ok">${fmtCount(successCount)} ${escapeHtml(groupTextMap.healthy)}</div>`);
+  if (errorCount > 0) badges.push(`<div class="${pillBase} status-error">${fmtCount(errorCount)} 异常</div>`);
+  if (!badges.length) badges.push(`<div class="${pillBase} status-disabled">${fmtCount(summary.account_count || 0)} ${escapeHtml(groupTextMap.accounts)}</div>`);
   return badges.join('');
 }
 
@@ -1661,15 +1690,19 @@ function renderGroupUniMmrSummary(group = {}) {
     }
   });
   const items = [
-    counts.good > 0 ? `<span class="group-unimmr-item uni-mmr-good">${fmtCount(counts.good)} ${escapeHtml(groupTextMap.healthy)}</span>` : '',
-    counts.warn > 0 ? `<span class="group-unimmr-item uni-mmr-warn">${fmtCount(counts.warn)} ${escapeHtml(groupTextMap.warning)}</span>` : '',
-    counts.bad > 0 ? `<span class="group-unimmr-item uni-mmr-bad">${fmtCount(counts.bad)} ${escapeHtml(groupTextMap.danger)}</span>` : '',
+    counts.good > 0 ? `<span class="group-unimmr-item group-unimmr-item-good">${fmtCount(counts.good)} ${escapeHtml(groupTextMap.healthy)}</span>` : '',
+    counts.warn > 0 ? `<span class="group-unimmr-item group-unimmr-item-warn">${fmtCount(counts.warn)} ${escapeHtml(groupTextMap.warning)}</span>` : '',
+    counts.bad > 0 ? `<span class="group-unimmr-item group-unimmr-item-bad">${fmtCount(counts.bad)} ${escapeHtml(groupTextMap.danger)}</span>` : '',
   ].filter(Boolean);
   if (!items.length) {
     return '';
   }
-  const summaryToneClass = counts.bad > 0 ? 'uni-mmr-bad' : counts.warn > 0 ? 'uni-mmr-warn' : 'uni-mmr-good';
-  return `<div class="group-unimmr-summary ${summaryToneClass}"><span class="group-unimmr-label">${escapeHtml(groupTextMap.uniMmr)}</span>${items.join('')}</div>`;
+  const summaryToneClass = counts.bad > 0
+    ? 'uni-mmr-bad status-error'
+    : counts.warn > 0
+      ? 'uni-mmr-warn status-partial'
+      : 'uni-mmr-good status-ok';
+  return `<div class="group-unimmr-summary badge badge-status-reference status-pill-reference status-pill-scaled status-pill-scale-130 group-header-pill group-unimmr-pill ${summaryToneClass}"><span class="group-unimmr-label">${escapeHtml(groupTextMap.uniMmr)}</span>${items.join('')}</div>`;
 }
 
 function renderAccountListContent(group) {
@@ -1697,26 +1730,32 @@ function renderGroup(group) {
   const distributionAmount = distributionDisplayAmount(summary, group.profit_summary, group.accounts);
   const mainAccountId = String(group.main_account_id || '');
   const expanded = isGroupExpanded(mainAccountId);
+  const groupStatusBadges = renderGroupStatusBadges(summary);
   return `
     <section class="group" data-main-account-id="${escapeHtml(mainAccountId)}">
       <div class="group-head">
-        <div><h2>${escapeHtml(group.main_account_name || group.main_account_id || '-')}</h2><div class="mono">${escapeHtml(mainAccountId)}</div></div>
+        <div class="group-title-block group-title-inline">
+          <h2>${escapeHtml(group.main_account_name || group.main_account_id || '-')}</h2>
+          <span class="group-title-divider" aria-hidden="true"></span>
+          <span class="mono group-subtitle group-subtitle-inline">${escapeHtml(mainAccountId)}</span>
+          <span class="group-title-divider group-title-divider-meta" aria-hidden="true"></span>
+          <div class="group-badges group-title-badges">${groupStatusBadges}</div>
+        </div>
         <div class="group-actions">
           ${renderGroupUniMmrSummary(group)}
-          <div class="group-badges">${renderGroupStatusBadges(summary)}</div>
           <button class="group-toggle-button" type="button" data-main-account-id="${escapeHtml(mainAccountId)}" aria-expanded="${expanded ? 'true' : 'false'}">${expanded ? groupTextMap.collapseAccounts : groupTextMap.expandAccounts}</button>
         </div>
       </div>
       <div class="group-summary">
         ${[
-          { label: '权益', value: fmt(summary.equity), tone: '' },
-          { label: '保证金', value: fmt(summary.margin), tone: '' },
-          { label: '可用余额', value: fmt(summary.available_balance), tone: '' },
-          { label: '未实现盈亏', value: fmt(summary.unrealized_pnl), tone: numberTone(summary.unrealized_pnl) },
-          { label: '分发收益', value: fmt(distributionAmount), tone: numberTone(distributionAmount) },
+          { label: '权益', value: fmtCurrency(summary.equity), tone: '' },
+          { label: '保证金', value: fmtCurrency(summary.margin), tone: '' },
+          { label: '可用余额', value: fmtCurrency(summary.available_balance), tone: '' },
+          { label: '未实现盈亏', value: fmtCurrency(summary.unrealized_pnl), tone: numberTone(summary.unrealized_pnl) },
+          { label: '分发收益', value: fmtCurrency(distributionAmount), tone: numberTone(distributionAmount) },
           { label: '7日年化', value: fmtPercent(summary.distribution_apy_7d), tone: numberTone(summary.distribution_apy_7d) },
         ].map(({ label, value, tone }) => `
-          <div class="metric"><div class="label">${label}</div><div class="value ${tone}">${value}</div></div>
+          <div class="metric metric-card"><div class="label metric-label">${label}</div><div class="value metric-value ${tone}">${value}</div></div>
         `).join('')}
       </div>
       <div class="account-list${expanded ? '' : ' is-collapsed'}" data-rendered="${expanded ? 'true' : 'false'}">
@@ -1899,9 +1938,11 @@ function render(payload) {
   latestPayload = payload;
   const groups = Array.isArray(payload.groups) ? payload.groups : [];
   normalizeGroupUiState(groups);
+  const monitorStatus = payload.status || 'idle';
 
-  connectionBadge.textContent = textStatus(payload.status || 'idle');
-  connectionBadge.className = `badge ${statusClass(payload.status || 'idle')}`;
+  connectionBadge.textContent = textStatus(monitorStatus);
+  connectionBadge.className = `badge badge-status-reference status-pill-reference status-pill-scaled status-pill-scale-130 ${statusClass(monitorStatus)}`;
+  connectionBadge.dataset.monitorStatus = monitorStatus;
   messageText.textContent = textMessage(payload.message);
   updatedAt.textContent = `更新时间：${fmtTime(payload.updated_at)}`;
 
@@ -1984,10 +2025,24 @@ function resetMonitorV2TestState() {
   applyActionButtonState();
 }
 
-function describeRefreshResult(refreshResult, elapsedSeconds) {
-  if (!refreshResult) return `刷新完成，耗时 ${elapsedSeconds} 秒`;
+function payloadContainsMonitorSnapshot(payload = {}) {
+  return Array.isArray(payload.groups)
+    || typeof payload.summary === 'object'
+    || typeof payload.profit_summary === 'object'
+    || payload.updated_at !== undefined;
+}
+
+function describeRefreshResult(refreshResult, elapsedSeconds, { snapshotApplied = true } = {}) {
+  if (!refreshResult) {
+    return snapshotApplied
+      ? `刷新完成，耗时 ${elapsedSeconds} 秒`
+      : `刷新请求已发送，耗时 ${elapsedSeconds} 秒，当前数据保持不变，等待新数据返回后自动更新`;
+  }
   if (refreshResult.success) {
     const fallbackSections = Array.isArray(refreshResult.fallback_sections) ? refreshResult.fallback_sections : [];
+    if (!snapshotApplied) {
+      return `刷新请求已发送，耗时 ${elapsedSeconds} 秒，当前数据保持不变，等待新数据返回后自动更新`;
+    }
     return fallbackSections.length > 0
       ? `刷新成功，耗时 ${elapsedSeconds} 秒，部分数据沿用了上一轮成功结果`
       : `刷新成功，耗时 ${elapsedSeconds} 秒，数据已更新`;
@@ -2029,9 +2084,12 @@ async function refreshNow() {
     const response = await apiFetch('/api/monitor/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
-    render(payload);
+    const snapshotApplied = payloadContainsMonitorSnapshot(payload);
+    if (snapshotApplied) {
+      render(payload);
+    }
     const elapsedSeconds = Math.max(1, Math.round((Date.now() - refreshStartedAt) / 1000));
-    messageText.textContent = describeRefreshResult(payload.refresh_result, elapsedSeconds);
+    messageText.textContent = describeRefreshResult(payload.refresh_result, elapsedSeconds, { snapshotApplied });
   } catch (error) {
     messageText.textContent = `立即刷新失败：${error}`;
   } finally {
@@ -2331,7 +2389,8 @@ async function bootstrap() {
   });
   source.onerror = () => {
     connectionBadge.textContent = textStatus('reconnecting');
-    connectionBadge.className = `badge ${statusClass('reconnecting')}`;
+    connectionBadge.className = `badge badge-status-reference status-pill-reference status-pill-scaled status-pill-scale-130 ${statusClass('reconnecting')}`;
+    connectionBadge.dataset.monitorStatus = 'reconnecting';
   };
   window.addEventListener('beforeunload', () => {
     if (pendingStreamFrame !== null) {
@@ -2345,6 +2404,7 @@ async function bootstrap() {
 window.__monitorV2 = {
   render,
   renderAccount,
+  refreshNow,
   scheduleStreamRender,
   appendFundingLog,
   renderFundingLogPanel,

@@ -110,6 +110,7 @@ class BinanceMonitorGateway:
         )
         self._distribution_backfill_task: asyncio.Task[None] | None = None
         self._income_refresh_task: asyncio.Task[dict[str, Any] | None] | None = None
+        self._active_refresh_reason = "auto"
         headers = {"X-MBX-APIKEY": self._account.api_key}
         self._papi_client = httpx.AsyncClient(
             base_url="https://papi.binance.com",
@@ -234,10 +235,12 @@ class BinanceMonitorGateway:
         previous_snapshot: dict[str, Any] | None = None,
         mark_price_provider: RefreshMarkPriceProvider | None = None,
         refresh_id: str | None = None,
+        refresh_reason: str | None = None,
     ) -> dict[str, Any]:
         if not self._account.api_key or not self._account.api_secret:
             raise MonitorGatewayError("Binance API credentials are not configured")
 
+        self._active_refresh_reason = refresh_reason or "auto"
         bounded_window_days = max(1, min(history_window_days, 30))
         now = datetime.now(UTC)
         end_time = int(now.timestamp() * 1000)
@@ -1398,6 +1401,18 @@ class BinanceMonitorGateway:
         return False
 
     def _retry_budget(self, *, is_core: bool) -> tuple[float, int, tuple[float, ...]]:
+        if self._active_refresh_reason == "manual":
+            if is_core:
+                return (
+                    max(self._settings.binance_manual_core_timeout_ms, 1) / 1000,
+                    max(1, self._settings.binance_manual_core_retry_attempts),
+                    CORE_RETRY_DELAYS_SECONDS,
+                )
+            return (
+                max(self._settings.binance_manual_secondary_timeout_ms, 1) / 1000,
+                max(1, self._settings.binance_manual_secondary_retry_attempts),
+                SECONDARY_RETRY_DELAYS_SECONDS,
+            )
         if is_core:
             return (
                 max(self._settings.binance_core_timeout_ms, 1) / 1000,

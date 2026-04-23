@@ -36,6 +36,7 @@ class FakeImportGateway:
         previous_snapshot: dict | None = None,
         mark_price_provider=None,
         refresh_id: str | None = None,
+        refresh_reason: str | None = None,
     ) -> dict:
         return {
             "status": "ok",
@@ -115,6 +116,7 @@ class FailingImportGateway(FakeImportGateway):
         previous_snapshot: dict | None = None,
         mark_price_provider=None,
         refresh_id: str | None = None,
+        refresh_reason: str | None = None,
     ) -> dict:
         raise RuntimeError("refresh failed")
 

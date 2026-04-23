@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from copy import deepcopy
 from datetime import UTC, datetime
 from decimal import Decimal
 from time import perf_counter
@@ -44,6 +45,7 @@ class UnifiedAccountGateway(Protocol):
         previous_snapshot: dict[str, Any] | None = None,
         mark_price_provider: RefreshMarkPriceProvider | None = None,
         refresh_id: str | None = None,
+        refresh_reason: str | None = None,
     ) -> dict[str, Any]: ...
 
     async def close(self) -> None: ...
@@ -387,7 +389,10 @@ class AccountMonitorController:
                 self._settings.monitor_refresh_timeout_ms,
             )
             try:
-                payload = await asyncio.wait_for(self._collect_payload(refresh_id=refresh_id), timeout=timeout_seconds)
+                payload = await asyncio.wait_for(
+                    self._collect_payload(refresh_id=refresh_id, refresh_reason=reason),
+                    timeout=timeout_seconds,
+                )
             except asyncio.TimeoutError as exc:
                 duration_ms = int((perf_counter() - started_at) * 1000)
                 logger.warning(
@@ -440,6 +445,22 @@ class AccountMonitorController:
                     payload.get("refresh_meta", {}).get("failed_accounts", []),
                 )
                 return payload, False
+            if self._should_publish_preserved_failure_payload(payload, reason=reason):
+                broadcast_started_at = perf_counter()
+                self._last_payload = payload
+                await self._broadcast(payload)
+                broadcast_ms = int((perf_counter() - broadcast_started_at) * 1000)
+                duration_ms = int((perf_counter() - started_at) * 1000)
+                payload["refresh_meta"]["timings"]["broadcast_ms"] = broadcast_ms
+                payload["refresh_meta"]["timings"]["total_ms"] = duration_ms
+                logger.warning(
+                    "Refresh published preserved failure payload refresh_id=%s reason=%s duration_ms=%s failed_accounts=%s",
+                    refresh_id,
+                    reason,
+                    duration_ms,
+                    payload.get("refresh_meta", {}).get("failed_accounts", []),
+                )
+                return payload, False
             duration_ms = int((perf_counter() - started_at) * 1000)
             payload["refresh_meta"]["timings"]["broadcast_ms"] = 0
             payload["refresh_meta"]["timings"]["total_ms"] = duration_ms
@@ -453,7 +474,7 @@ class AccountMonitorController:
             )
             return payload, False
 
-    async def _collect_payload(self, *, refresh_id: str) -> dict[str, Any]:
+    async def _collect_payload(self, *, refresh_id: str, refresh_reason: str) -> dict[str, Any]:
         accounts = list(self._settings.monitor_accounts.values())
         if not accounts:
             return self._build_idle_payload("error", no_accounts_available_message())
@@ -473,6 +494,7 @@ class AccountMonitorController:
                     mark_price_provider=mark_price_provider,
                     semaphore=semaphore,
                     refresh_id=refresh_id,
+                    refresh_reason=refresh_reason,
                 )
                 for account in accounts
             )
@@ -488,6 +510,7 @@ class AccountMonitorController:
         mark_price_provider: RefreshMarkPriceProvider,
         semaphore: asyncio.Semaphore,
         refresh_id: str,
+        refresh_reason: str,
     ) -> dict[str, Any]:
         gateway = self._gateways.get(account.account_id)
         if gateway is None:
@@ -501,6 +524,7 @@ class AccountMonitorController:
                     previous_snapshot=previous_snapshot,
                     mark_price_provider=mark_price_provider,
                     refresh_id=refresh_id,
+                    refresh_reason=refresh_reason,
                 )
             snapshot.setdefault("account_id", account.account_id)
             snapshot.setdefault("account_name", account.display_name)
@@ -515,6 +539,29 @@ class AccountMonitorController:
             snapshot["diagnostics"]["timings"]["controller_total_ms"] = int((perf_counter() - started_at) * 1000)
             return snapshot
         except Exception as exc:
+            if isinstance(previous_snapshot, dict):
+                snapshot = deepcopy(previous_snapshot)
+                diagnostics = snapshot.setdefault("diagnostics", {})
+                diagnostics["preserved_previous_snapshot"] = True
+                diagnostics["refresh_failed_at"] = self._utc_now()
+                diagnostics["refresh_id"] = refresh_id
+                timings = diagnostics.setdefault("timings", {})
+                timings["controller_total_ms"] = int((perf_counter() - started_at) * 1000)
+                snapshot.update(
+                    {
+                        "status": "error",
+                        "source": "papi",
+                        "account_id": account.account_id,
+                        "account_name": account.display_name,
+                        "main_account_id": account.main_account_id,
+                        "main_account_name": account.main_account_name,
+                        "child_account_id": account.child_account_id,
+                        "child_account_name": account.child_account_name,
+                        "account_status": "ERROR",
+                        "message": sanitize_error_summary(exc, fallback="Account snapshot failed"),
+                    }
+                )
+                return snapshot
             return {
                 "status": "error",
                 "source": "papi",
@@ -668,6 +715,14 @@ class AccountMonitorController:
         next_summary = payload.get("summary") or {}
         return int(next_summary.get("account_count") or 0) > 0
 
+    def _should_publish_preserved_failure_payload(self, payload: dict[str, Any], *, reason: str) -> bool:
+        if reason != "auto":
+            return False
+        summary = payload.get("summary") or {}
+        account_count = int(summary.get("account_count") or 0)
+        success_count = int(summary.get("success_count") or 0)
+        return account_count > 0 and success_count == 0
+
     def _decorate_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
         service = dict(payload.get("service") or {})
         service["monitor_enabled"] = self._monitor_enabled
@@ -763,13 +818,14 @@ class AccountMonitorController:
         for account in accounts:
             if account.get("status") == "ok":
                 success_count += 1
+            else:
+                error_count += 1
+            if account.get("status") == "ok" or self._uses_preserved_snapshot(account):
                 account_totals = account.get("totals") or {}
                 for key in totals:
                     if key == "distribution_apy_7d":
                         continue
                     totals[key] += Decimal(str(account_totals.get(key) or "0"))
-            else:
-                error_count += 1
         totals["distribution_apy_7d"] = self._calculate_distribution_apy(
             totals["total_distribution"],
             totals["equity"],
@@ -793,7 +849,7 @@ class AccountMonitorController:
         equity = Decimal(str(summary.get("equity") or "0"))
         has_successful_accounts = False
         for account in accounts:
-            if account.get("status") != "ok":
+            if account.get("status") != "ok" and not self._uses_preserved_snapshot(account):
                 continue
             has_successful_accounts = True
             account_profit_summary = account.get("distribution_profit_summary") or {}
@@ -833,6 +889,10 @@ class AccountMonitorController:
             aggregated[key]["rate"] = self._calculate_ratio(aggregated[key]["amount"], equity)
         aggregated["backfill_complete"] = all(bool(aggregated[key]["complete"]) for key in ("today", "week", "month", "year", "all"))
         return aggregated
+
+    def _uses_preserved_snapshot(self, account: dict[str, Any]) -> bool:
+        diagnostics = account.get("diagnostics") or {}
+        return bool(diagnostics.get("preserved_previous_snapshot"))
 
     def _empty_totals(self) -> dict[str, Decimal]:
         return {

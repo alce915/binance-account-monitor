@@ -164,6 +164,18 @@ def test_public_login_assets_prefix_is_not_blocked_by_auth(tmp_path: Path) -> No
     assert response.status_code == 404
 
 
+def test_login_stylesheet_under_static_is_public_for_unauthenticated_clients(tmp_path: Path) -> None:
+    with TestClient(api_module.app) as client:
+        client.app.state.monitor = FakeMonitor()
+        client.app.state.access_control = build_auth_service(tmp_path, enabled=True)
+        client.app.state.test_client_ip = "198.51.100.10"
+
+        response = client.get("/static/login.css")
+
+    assert response.status_code == 200
+    assert "text/css" in response.headers.get("content-type", "")
+
+
 def test_guest_login_can_read_but_cannot_refresh(tmp_path: Path) -> None:
     with TestClient(api_module.app) as client:
         client.app.state.monitor = FakeMonitor()

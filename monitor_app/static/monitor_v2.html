@@ -1173,10 +1173,11 @@
       table { display: block; overflow-x: auto; }
     }
   </style>
+  <link rel="stylesheet" href="/static/monitor_v2.css?v=20260423-08">
 </head>
-<body>
-  <main class="shell">
-    <section class="hero">
+<body class="monitor-screen" data-theme="black-gold">
+  <main class="shell shell-monitor">
+    <section class="hero hero-seamless">
       <div class="hero-head">
         <div class="hero-title-row">
           <div>
@@ -1184,15 +1185,15 @@
             <p>步步为营，稳中求胜</p>
           </div>
           <div class="hero-actions">
-            <div class="badge" id="connectionBadge">连接中</div>
+            <div class="badge badge-status-reference status-pill-reference status-pill-scaled status-pill-scale-130" id="connectionBadge" data-monitor-status="idle">连接中</div>
             <div class="hero-controls">
-              <label class="switch" for="monitorToggle">
+              <label class="switch switch-luxury switch-reference switch-scaled" for="monitorToggle">
                 <input type="checkbox" id="monitorToggle" checked>
                 <span class="switch-track" aria-hidden="true"></span>
               </label>
-              <button class="refresh-button" id="downloadTemplateButton" type="button">下载模板</button>
-              <button class="refresh-button" id="importButton" type="button">导入 Excel</button>
-              <button class="refresh-button" id="fundingTransferButton" type="button">资金归集</button>
+              <button class="refresh-button hero-action-button-stretched" id="downloadTemplateButton" type="button">下载模板</button>
+              <button class="refresh-button hero-action-button-stretched" id="importButton" type="button">导入 Excel</button>
+              <button class="refresh-button hero-action-button-stretched" id="fundingTransferButton" type="button">资金归集</button>
             </div>
           </div>
         </div>
@@ -1210,13 +1211,13 @@
           <button class="refresh-button" id="logoutButton" type="button">退出登录</button>
         </div>
         <div class="mono" id="updatedAt">-</div>
-        <button class="refresh-button" id="refreshButton" type="button">立即刷新</button>
+        <button class="refresh-button hero-action-button-stretched" id="refreshButton" type="button">立即刷新</button>
         <input id="importInput" type="file" accept=".xlsx" hidden>
       </div>
     </section>
 
     <section class="summary" id="summaryCards"></section>
-    <section class="profit-summary" id="profitCards"></section>
+    <section class="profit-summary profit-strip linked-strip" id="profitCards"></section>
     <section class="groups" id="groupsContainer"></section>
   </main>
 
@@ -1308,6 +1309,6 @@
     </section>
   </div>
 
-  <script src="/static/monitor_v2.js?v=20260418-3"></script>
+  <script src="/static/monitor_v2.js?v=20260423-06"></script>
 </body>
 </html>

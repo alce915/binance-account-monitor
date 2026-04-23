@@ -2,8 +2,10 @@
 
 import asyncio
 import json
+import shutil
 from decimal import Decimal
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pytest
 
@@ -35,6 +37,7 @@ class FakeMonitorGateway:
         previous_snapshot: dict | None = None,
         mark_price_provider=None,
         refresh_id: str | None = None,
+        refresh_reason: str | None = None,
     ) -> dict:
         FakeMonitorGateway.call_counts[self.account.account_id] = FakeMonitorGateway.call_counts.get(self.account.account_id, 0) + 1
         return {
@@ -237,6 +240,7 @@ class SlowMonitorGateway(FakeMonitorGateway):
         previous_snapshot: dict | None = None,
         mark_price_provider=None,
         refresh_id: str | None = None,
+        refresh_reason: str | None = None,
     ) -> dict:
         SlowMonitorGateway.call_count += 1
         if SlowMonitorGateway.call_count > 1:
@@ -249,6 +253,7 @@ class SlowMonitorGateway(FakeMonitorGateway):
             previous_snapshot=previous_snapshot,
             mark_price_provider=mark_price_provider,
             refresh_id=refresh_id,
+            refresh_reason=refresh_reason,
         )
 
 
@@ -301,6 +306,7 @@ class FailAfterFirstGateway(FakeMonitorGateway):
         previous_snapshot: dict | None = None,
         mark_price_provider=None,
         refresh_id: str | None = None,
+        refresh_reason: str | None = None,
     ) -> dict:
         count = FailAfterFirstGateway.call_counts.get(self.account.account_id, 0) + 1
         FailAfterFirstGateway.call_counts[self.account.account_id] = count
@@ -313,6 +319,7 @@ class FailAfterFirstGateway(FakeMonitorGateway):
             previous_snapshot=previous_snapshot,
             mark_price_provider=mark_price_provider,
             refresh_id=refresh_id,
+            refresh_reason=refresh_reason,
         )
 
 
@@ -404,6 +411,53 @@ async def test_auto_refresh_failure_logs_and_broadcasts_warning(tmp_path: Path, 
     assert any("Auto refresh failed refresh_id=" in record.getMessage() for record in caplog.records)
 
 
+@pytest.mark.asyncio
+async def test_auto_refresh_all_failed_after_success_broadcasts_preserved_error_snapshot_without_tmp_fixture() -> None:
+    FailAfterFirstGateway.call_counts = {}
+    temp_root = Path(".codex-test-runtime") / "auto-refresh-preserved-broadcast"
+    shutil.rmtree(temp_root, ignore_errors=True)
+    temp_root.mkdir(parents=True, exist_ok=True)
+    try:
+        settings = Settings(
+            _env_file=None,
+            monitor_refresh_interval_ms=50,
+            monitor_history_window_days=3,
+            monitor_history_db_path=temp_root / "history.db",
+        )
+        account = MonitorAccountConfig(
+            account_id="group_a.sub1",
+            child_account_id="sub1",
+            child_account_name="Sub One",
+            main_account_id="group_a",
+            main_account_name="Group A",
+            api_key="k1",
+            api_secret="s1",
+        )
+        settings.monitor_accounts = {account.account_id: account}
+        settings.monitor_main_accounts = {
+            "group_a": MainAccountConfig(main_id="group_a", name="Group A", children=(account,)),
+        }
+        controller = AccountMonitorController(settings, gateway_factory=lambda selected: FailAfterFirstGateway(selected))
+        await controller.refresh_now()
+        queue = await controller.subscribe()
+        try:
+            initial = await asyncio.wait_for(queue.get(), timeout=1)
+            warning = await asyncio.wait_for(queue.get(), timeout=1)
+        finally:
+            controller.unsubscribe(queue)
+            await controller.close()
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+    assert initial["data"]["status"] == "ok"
+    assert warning["data"]["status"] == "error"
+    assert warning["data"]["summary"]["success_count"] == 0
+    assert warning["data"]["summary"]["error_count"] == 1
+    assert warning["data"]["summary"]["equity"] == "1200"
+    assert warning["data"]["accounts"][0]["diagnostics"]["preserved_previous_snapshot"] is True
+    assert warning["data"]["accounts"][0]["message"] == "temporary refresh failure"
+
+
 class PartialFailureGateway(FakeMonitorGateway):
     call_counts: dict[str, int] = {}
 
@@ -416,6 +470,7 @@ class PartialFailureGateway(FakeMonitorGateway):
         previous_snapshot: dict | None = None,
         mark_price_provider=None,
         refresh_id: str | None = None,
+        refresh_reason: str | None = None,
     ) -> dict:
         count = PartialFailureGateway.call_counts.get(self.account.account_id, 0) + 1
         PartialFailureGateway.call_counts[self.account.account_id] = count
@@ -428,6 +483,7 @@ class PartialFailureGateway(FakeMonitorGateway):
             previous_snapshot=previous_snapshot,
             mark_price_provider=mark_price_provider,
             refresh_id=refresh_id,
+            refresh_reason=refresh_reason,
         )
 
 
@@ -479,6 +535,9 @@ async def test_refresh_partial_failure_commits_partial_payload(tmp_path: Path) -
     assert second["summary"]["account_count"] == 2
     assert second["summary"]["success_count"] == 1
     assert second["summary"]["error_count"] == 1
+    assert second["summary"]["equity"] == "2400"
+    assert second["summary"]["total_distribution"] == "3.0"
+    assert second["profit_summary"]["all"]["amount"] == "3.0"
     assert second["refresh_result"]["failed_accounts"] == [
         {"account_id": "group_a.sub2", "message": "temporary refresh failure"}
     ]
@@ -490,6 +549,68 @@ async def test_refresh_partial_failure_commits_partial_payload(tmp_path: Path) -
     )
     assert failing_account["status"] == "error"
     assert failing_account["message"] == "temporary refresh failure"
+    assert failing_account["totals"]["equity"] == "1200"
+    assert failing_account["totals"]["total_distribution"] == "1.5"
+
+
+@pytest.mark.asyncio
+async def test_refresh_partial_failure_preserves_previous_account_values_without_tmp_fixture() -> None:
+    PartialFailureGateway.call_counts = {}
+    with TemporaryDirectory() as temp_dir:
+        temp_root = Path(temp_dir)
+        settings = Settings(
+            _env_file=None,
+            monitor_refresh_interval_ms=999999,
+            monitor_history_window_days=3,
+            monitor_history_db_path=temp_root / "history.db",
+        )
+        account1 = MonitorAccountConfig(
+            account_id="group_a.sub1",
+            child_account_id="sub1",
+            child_account_name="Sub One",
+            main_account_id="group_a",
+            main_account_name="Group A",
+            api_key="k1",
+            api_secret="s1",
+        )
+        account2 = MonitorAccountConfig(
+            account_id="group_a.sub2",
+            child_account_id="sub2",
+            child_account_name="Sub Two",
+            main_account_id="group_a",
+            main_account_name="Group A",
+            api_key="k2",
+            api_secret="s2",
+        )
+        settings.monitor_accounts = {
+            account.account_id: account
+            for account in (account1, account2)
+        }
+        settings.monitor_main_accounts = {
+            "group_a": MainAccountConfig(main_id="group_a", name="Group A", children=(account1, account2)),
+        }
+        controller = AccountMonitorController(settings, gateway_factory=lambda selected: PartialFailureGateway(selected))
+        try:
+            first = await controller.refresh_now()
+            second = await controller.refresh_now()
+        finally:
+            await controller.close()
+
+        assert first["refresh_result"]["success"] is True
+        assert second["refresh_result"]["success"] is True
+        assert second["summary"]["equity"] == "2400"
+        assert second["summary"]["total_distribution"] == "3.0"
+        assert second["profit_summary"]["all"]["amount"] == "3.0"
+        failing_account = next(
+            account
+            for group in second["groups"]
+            for account in group["accounts"]
+            if account["account_id"] == "group_a.sub2"
+        )
+        assert failing_account["status"] == "error"
+        assert failing_account["message"] == "temporary refresh failure"
+        assert failing_account["totals"]["equity"] == "1200"
+        assert failing_account["totals"]["total_distribution"] == "1.5"
 
 
 class RecordingUniMmrAlerts:
@@ -518,6 +639,32 @@ class RecordingUniMmrAlerts:
 
     def has_danger_accounts(self) -> bool:
         return False
+
+
+class RefreshReasonGateway(FakeMonitorGateway):
+    seen_refresh_reasons: list[str | None] = []
+
+    async def get_unified_account_snapshot(
+        self,
+        *,
+        history_window_days: int = 7,
+        income_limit: int = 100,
+        interest_limit: int = 100,
+        previous_snapshot: dict | None = None,
+        mark_price_provider=None,
+        refresh_id: str | None = None,
+        refresh_reason: str | None = None,
+    ) -> dict:
+        RefreshReasonGateway.seen_refresh_reasons.append(refresh_reason)
+        return await super().get_unified_account_snapshot(
+            history_window_days=history_window_days,
+            income_limit=income_limit,
+            interest_limit=interest_limit,
+            previous_snapshot=previous_snapshot,
+            mark_price_provider=mark_price_provider,
+            refresh_id=refresh_id,
+            refresh_reason=refresh_reason,
+        )
 
 
 @pytest.mark.asyncio
@@ -592,6 +739,40 @@ async def test_simulate_unimmr_alerts_overrides_current_snapshot_values(tmp_path
     assert len(fake_alerts.payloads[0]["accounts"]) == 1
     assert fake_alerts.payloads[0]["accounts"][0]["account_id"] == "group_a.sub1"
     assert fake_alerts.payloads[0]["accounts"][0]["uni_mmr"] == Decimal("1.18")
+
+
+@pytest.mark.asyncio
+async def test_manual_refresh_passes_manual_reason_to_gateway_without_tmp_fixture() -> None:
+    RefreshReasonGateway.seen_refresh_reasons = []
+    with TemporaryDirectory() as temp_dir:
+        temp_root = Path(temp_dir)
+        settings = Settings(
+            _env_file=None,
+            monitor_refresh_interval_ms=999999,
+            monitor_history_window_days=3,
+            monitor_history_db_path=temp_root / "history.db",
+        )
+        account = MonitorAccountConfig(
+            account_id="group_a.sub1",
+            child_account_id="sub1",
+            child_account_name="Sub One",
+            main_account_id="group_a",
+            main_account_name="Group A",
+            api_key="k1",
+            api_secret="s1",
+        )
+        settings.monitor_accounts = {account.account_id: account}
+        settings.monitor_main_accounts = {
+            "group_a": MainAccountConfig(main_id="group_a", name="Group A", children=(account,)),
+        }
+        controller = AccountMonitorController(settings, gateway_factory=lambda selected: RefreshReasonGateway(selected))
+        try:
+            refreshed = await controller.refresh_now()
+        finally:
+            await controller.close()
+
+        assert refreshed["refresh_result"]["success"] is True
+        assert RefreshReasonGateway.seen_refresh_reasons == ["manual"]
 
 
 @pytest.mark.asyncio
@@ -890,6 +1071,7 @@ class FallbackGateway(FakeMonitorGateway):
         previous_snapshot: dict | None = None,
         mark_price_provider=None,
         refresh_id: str | None = None,
+        refresh_reason: str | None = None,
     ) -> dict:
         payload = await super().get_unified_account_snapshot(
             history_window_days=history_window_days,
@@ -898,6 +1080,7 @@ class FallbackGateway(FakeMonitorGateway):
             previous_snapshot=previous_snapshot,
             mark_price_provider=mark_price_provider,
             refresh_id=refresh_id,
+            refresh_reason=refresh_reason,
         )
         payload["section_errors"] = {
             "distribution_history": {
@@ -957,6 +1140,7 @@ class DiagnosticGateway(FakeMonitorGateway):
         previous_snapshot: dict | None = None,
         mark_price_provider=None,
         refresh_id: str | None = None,
+        refresh_reason: str | None = None,
     ) -> dict:
         payload = await super().get_unified_account_snapshot(
             history_window_days=history_window_days,
@@ -965,6 +1149,7 @@ class DiagnosticGateway(FakeMonitorGateway):
             previous_snapshot=previous_snapshot,
             mark_price_provider=mark_price_provider,
             refresh_id=refresh_id,
+            refresh_reason=refresh_reason,
         )
         if self.account.account_id == "group_a.sub1":
             payload["diagnostics"]["timings"] = {"gateway_total_ms": 17, "spot_query_ms": 9}
@@ -1042,6 +1227,7 @@ class TimeoutAfterFirstGateway(FakeMonitorGateway):
         previous_snapshot: dict | None = None,
         mark_price_provider=None,
         refresh_id: str | None = None,
+        refresh_reason: str | None = None,
     ) -> dict:
         count = TimeoutAfterFirstGateway.call_counts.get(self.account.account_id, 0) + 1
         TimeoutAfterFirstGateway.call_counts[self.account.account_id] = count
@@ -1054,6 +1240,7 @@ class TimeoutAfterFirstGateway(FakeMonitorGateway):
             previous_snapshot=previous_snapshot,
             mark_price_provider=mark_price_provider,
             refresh_id=refresh_id,
+            refresh_reason=refresh_reason,
         )
 
 

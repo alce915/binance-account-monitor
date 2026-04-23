@@ -4,12 +4,18 @@ import asyncio
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from time import perf_counter
 
 import httpx
 import pytest
 
-from monitor_app.binance import BinanceMonitorGateway, RetriedRequestError
+from monitor_app.binance import (
+    BinanceMonitorGateway,
+    CORE_RETRY_DELAYS_SECONDS,
+    SECONDARY_RETRY_DELAYS_SECONDS,
+    RetriedRequestError,
+)
 from monitor_app.config import MonitorAccountConfig, Settings
 from monitor_app.history_store import HistoryEvent
 
@@ -487,6 +493,46 @@ async def test_get_unified_account_snapshot_uses_core_and_secondary_retry_budget
     assert snapshot["totals"]["total_interest"] == Decimal("0")
     assert snapshot["distribution_profit_summary"]["all"]["complete"] is True
     assert snapshot["positions"][0]["mark_price"] == Decimal("80500")
+
+
+@pytest.mark.asyncio
+async def test_retry_budget_switches_to_manual_profile_without_tmp_fixture() -> None:
+    with TemporaryDirectory() as temp_dir:
+        temp_root = Path(temp_dir)
+        settings = Settings(
+            _env_file=None,
+            monitor_history_db_path=temp_root / "history.db",
+            binance_core_retry_attempts=5,
+            binance_secondary_retry_attempts=3,
+            binance_core_timeout_ms=4_000,
+            binance_secondary_timeout_ms=2_500,
+            binance_manual_core_retry_attempts=2,
+            binance_manual_secondary_retry_attempts=1,
+            binance_manual_core_timeout_ms=2_500,
+            binance_manual_secondary_timeout_ms=1_500,
+        )
+        gateway = BinanceMonitorGateway(
+            settings,
+            MonitorAccountConfig(
+                account_id="group_a.sub1",
+                child_account_id="sub1",
+                child_account_name="Sub One",
+                main_account_id="group_a",
+                main_account_name="Group A",
+                api_key="k",
+                api_secret="s",
+            ),
+        )
+
+        try:
+            assert gateway._retry_budget(is_core=True) == (4.0, 5, CORE_RETRY_DELAYS_SECONDS)
+            assert gateway._retry_budget(is_core=False) == (2.5, 3, SECONDARY_RETRY_DELAYS_SECONDS)
+
+            gateway._active_refresh_reason = "manual"
+            assert gateway._retry_budget(is_core=True) == (2.5, 2, CORE_RETRY_DELAYS_SECONDS)
+            assert gateway._retry_budget(is_core=False) == (1.5, 1, SECONDARY_RETRY_DELAYS_SECONDS)
+        finally:
+            await gateway.close()
 
 
 @pytest.mark.asyncio

@@ -177,6 +177,207 @@ afterEach(() => {
 });
 
 describe('monitor_v2.js', () => {
+  it('marks the monitor document and key metric regions for the black-gold theme', () => {
+    const app = createApp();
+    apps.push(app);
+    app.api.resetTestState();
+
+    app.api.render(basePayload({
+      profit_summary: {
+        today: { label: '今日收益', amount: '12.34', rate: '0.01', complete: true },
+      },
+    }));
+
+    expect(app.document.body.dataset.theme).toBe('black-gold');
+    expect(app.document.querySelectorAll('#summaryCards .summary-card')).toHaveLength(6);
+    expect(app.document.querySelector('#profitCards')?.className).toContain('profit-strip');
+    expect(app.document.querySelectorAll('#profitCards .profit-card')).toHaveLength(1);
+  });
+
+  it('formats top-level monetary cards and profit strip amounts with a leading dollar sign while keeping rates as percentages', () => {
+    const app = createApp();
+    apps.push(app);
+    app.api.resetTestState();
+
+    app.api.render(basePayload({
+      summary: {
+        account_count: 1,
+        success_count: 1,
+        error_count: 0,
+        equity: '14793.16',
+        margin: '14887.94',
+        available_balance: '0',
+        unrealized_pnl: '-74449.18',
+        total_commission: '-0.0001',
+        distribution_apy_7d: '0.1297',
+      },
+      profit_summary: {
+        today: { label: '今日收益', amount: '8.22', rate: '0.0006', complete: true },
+      },
+    }));
+
+    const summaryText = app.document.getElementById('summaryCards').textContent;
+    const profitText = app.document.getElementById('profitCards').textContent;
+
+    expect(summaryText).toContain('$14,793.16');
+    expect(summaryText).toContain('-$74,449.18');
+    expect(profitText).toContain('$8.22');
+    expect(profitText).toContain('0.06%');
+  });
+
+  it('uses the frameless hero and luxury switch hooks for the refined header treatment', () => {
+    const app = createApp();
+    apps.push(app);
+
+    expect(app.document.querySelector('.hero')?.className).toContain('hero-seamless');
+    expect(app.document.querySelector('.switch')?.className).toContain('switch-luxury');
+  });
+
+  it('applies the reference-sized status pill and switch hooks on the hero controls', () => {
+    const app = createApp();
+    apps.push(app);
+    app.api.resetTestState();
+
+    app.api.render(basePayload());
+
+    expect(app.document.getElementById('connectionBadge')?.className).toContain('status-pill-reference');
+    expect(app.document.querySelector('.switch')?.className).toContain('switch-reference');
+  });
+
+  it('marks the hero status pill and switch with the scaled alignment hooks for the larger header proportion', () => {
+    const app = createApp();
+    apps.push(app);
+    app.api.resetTestState();
+
+    app.api.render(basePayload());
+
+    expect(app.document.getElementById('connectionBadge')?.className).toContain('status-pill-scaled');
+    expect(app.document.querySelector('.switch')?.className).toContain('switch-scaled');
+  });
+
+  it('marks the hero status pill with the 1.3x scaling hook for the enlarged badge request', () => {
+    const app = createApp();
+    apps.push(app);
+    app.api.resetTestState();
+
+    app.api.render(basePayload());
+
+    expect(app.document.getElementById('connectionBadge')?.className).toContain('status-pill-scale-130');
+  });
+
+  it('marks the three hero action buttons with the stretched-width hook so only the header controls grow longer', () => {
+    const app = createApp();
+    apps.push(app);
+
+    expect(app.document.querySelectorAll('.hero-controls .hero-action-button-stretched')).toHaveLength(3);
+  });
+
+  it('applies the same stretched-width hook to the toolbar refresh button so it matches the top action buttons', () => {
+    const app = createApp();
+    apps.push(app);
+
+    expect(app.document.getElementById('refreshButton')?.className).toContain('hero-action-button-stretched');
+  });
+
+  it('renders group titles as a single inline row with a divider before the group id metadata', () => {
+    const app = createApp();
+    apps.push(app);
+    app.api.resetTestState();
+
+    app.api.render(basePayload({
+      groups: [
+        {
+          ...basePayload().groups[0],
+          main_account_id: 'group_a',
+          main_account_name: 'isaga',
+        },
+      ],
+    }));
+
+    const titleRow = app.document.querySelector('.group-title-inline');
+    expect(titleRow).not.toBeNull();
+    expect(titleRow?.querySelector('h2')?.textContent).toContain('isaga');
+    expect(titleRow?.querySelectorAll('.group-title-divider')).toHaveLength(2);
+    expect(titleRow?.querySelector('.group-subtitle-inline')?.textContent).toContain('group_a');
+    expect(titleRow?.querySelector('.group-badges')?.className).toContain('group-title-badges');
+  });
+
+  it('uses the refined status pill and compact summary-card hooks from the reference treatment', () => {
+    const app = createApp();
+    apps.push(app);
+    app.api.resetTestState();
+
+    app.api.render(basePayload());
+
+    expect(app.document.getElementById('connectionBadge')?.className).toContain('badge-status-reference');
+    expect(app.document.querySelectorAll('#summaryCards .summary-card-refined')).toHaveLength(6);
+  });
+
+  it('maps the replica metric-card and linked-strip classes onto the top overview region', () => {
+    const app = createApp();
+    apps.push(app);
+    app.api.resetTestState();
+
+    app.api.render(basePayload({
+      profit_summary: {
+        today: { label: '今日收益 | 收益率', amount: '20.03', rate: '0.05', complete: true },
+        week: { label: '本周收益 | 收益率', amount: '60.10', rate: '0.16', complete: true },
+      },
+    }));
+
+    expect(app.document.querySelectorAll('#summaryCards .metric')).toHaveLength(6);
+    expect(app.document.getElementById('profitCards')?.className).toContain('linked-strip');
+    expect(app.document.querySelectorAll('#profitCards .linked-cell')).toHaveLength(2);
+  });
+
+  it('marks overview labels with the emphasis hooks so the descriptive text can scale independently from the values', () => {
+    const app = createApp();
+    apps.push(app);
+    app.api.resetTestState();
+
+    app.api.render(basePayload({
+      profit_summary: {
+        today: { label: '今日收益 | 收益率', amount: '20.03', rate: '0.05', complete: true },
+      },
+    }));
+
+    expect(app.document.querySelectorAll('#summaryCards .metric-label-emphasis')).toHaveLength(6);
+    expect(app.document.querySelectorAll('#profitCards .linked-label-emphasis')).toHaveLength(1);
+  });
+
+  it('marks the top overview cards with the proportional sizing hook for the larger reference ratio', () => {
+    const app = createApp();
+    apps.push(app);
+    app.api.resetTestState();
+
+    app.api.render(basePayload());
+
+    expect(app.document.querySelectorAll('#summaryCards .summary-card-proportional')).toHaveLength(6);
+    expect(app.document.querySelectorAll('#summaryCards .metric-value-proportional')).toHaveLength(6);
+  });
+
+  it('renders toolbar stat pills with the refined clipping hook so their rounded corners do not show square background bleed', () => {
+    const app = createApp();
+    apps.push(app);
+    app.api.resetTestState();
+
+    app.api.render(basePayload());
+
+    expect(app.document.querySelectorAll('#toolbarStats .toolbar-stat-pill-refined')).toHaveLength(3);
+    expect(app.document.querySelectorAll('#toolbarStats .toolbar-stat-pill-clipped')).toHaveLength(3);
+    expect(app.document.querySelectorAll('#toolbarStats .toolbar-stat-pill-surface')).toHaveLength(3);
+  });
+
+  it('tracks the monitor status on the connection badge so partial anomalies can render as danger without affecting reconnecting', () => {
+    const app = createApp();
+    apps.push(app);
+    app.api.resetTestState();
+
+    app.api.render(basePayload({ status: 'partial' }));
+
+    expect(app.document.getElementById('connectionBadge')?.dataset.monitorStatus).toBe('partial');
+  });
+
   it('disables write controls for guest sessions after bootstrap', async () => {
     const app = createApp();
     apps.push(app);
@@ -234,7 +435,7 @@ describe('monitor_v2.js', () => {
     expect(app.document.getElementById('groupsContainer').textContent).toContain('暂无分组');
   });
 
-  it('renders group UniMMR summary and places status badge before toggle button', () => {
+  it('renders group UniMMR summary in the actions row while the title row carries the group status badges', () => {
     const app = createApp();
     apps.push(app);
     app.api.resetTestState();
@@ -266,11 +467,14 @@ describe('monitor_v2.js', () => {
 
     const actions = app.document.querySelector('.group-actions');
     const children = Array.from(actions.children);
+    const titleRow = app.document.querySelector('.group-title-inline');
 
     expect(children[0].className).toContain('group-unimmr-summary');
     expect(children[0].className).toContain('uni-mmr-bad');
-    expect(children[1].className).toContain('group-badges');
-    expect(children[2].className).toContain('group-toggle-button');
+    expect(children[0].className).toContain('badge-status-reference');
+    expect(children[1].className).toContain('group-toggle-button');
+    expect(titleRow?.querySelector('.group-badges')?.className).toContain('group-title-badges');
+    expect(titleRow?.querySelector('.group-badges .badge')?.className).toContain('status-pill-reference');
     expect(children[0].textContent).toContain('UniMMR');
     expect(children[0].textContent).toContain('1 正常');
     expect(children[0].textContent).toContain('1 警惕');
@@ -392,6 +596,7 @@ describe('monitor_v2.js', () => {
     expect(badge.textContent).toContain('UniMMR');
     expect(badge.textContent).toContain('1.63');
     expect(badge.className).toContain('uni-mmr-good');
+    expect(badge.className).toContain('account-header-pill');
 
     const warnAccount = baseAccount('group_a.sub2', 'Warn');
     warnAccount.uni_mmr = '1.35';
@@ -404,6 +609,137 @@ describe('monitor_v2.js', () => {
     app.document.getElementById('groupsContainer').innerHTML = app.api.renderAccount(badAccount);
     badge = app.document.querySelector('.account-head .uni-mmr-indicator');
     expect(badge.className).toContain('uni-mmr-bad');
+  });
+
+  it('renders the account subtitle as a larger inline id and colored status text while keeping the header status pill styled consistently', () => {
+    const app = createApp();
+    apps.push(app);
+    app.api.resetTestState();
+
+    const account = baseAccount('group_a.sub1', 'Sub 1');
+    account.status = 'error';
+    account.account_status = 'ERROR';
+
+    app.document.getElementById('groupsContainer').innerHTML = app.api.renderAccount(account);
+
+    const subtitle = app.document.querySelector('.account-subtitle');
+    expect(subtitle?.querySelector('.account-subtitle-id')?.textContent).toContain('group_a.sub1');
+    expect(subtitle?.querySelector('.account-subtitle-divider')).not.toBeNull();
+    expect(subtitle?.querySelector('.account-subtitle-status')?.textContent).toContain('异常');
+    expect(subtitle?.querySelector('.account-subtitle-status')?.className).toContain('account-subtitle-status-error');
+    expect(app.document.querySelector('.account-head-actions .badge')?.className).toContain('account-header-pill');
+    expect(app.document.querySelector('.account-head-actions .badge')?.className).toContain('status-pill-reference');
+  });
+
+  it('falls back to the monitor status text in the account subtitle when account_status is missing', () => {
+    const app = createApp();
+    apps.push(app);
+    app.api.resetTestState();
+
+    const account = baseAccount('group_a.sub5', 'Sub 5');
+    account.status = 'error';
+    delete account.account_status;
+
+    app.document.getElementById('groupsContainer').innerHTML = app.api.renderAccount(account);
+
+    const subtitleStatus = app.document.querySelector('.account-subtitle-status');
+    expect(subtitleStatus?.textContent).toContain('异常');
+    expect(subtitleStatus?.className).toContain('account-subtitle-status-error');
+  });
+
+  it('refreshes monitor data into the existing cards and groups after the refresh request resolves', async () => {
+    const app = createApp();
+    apps.push(app);
+    app.api.resetTestState();
+
+    app.api.render(basePayload({
+      summary: {
+        account_count: 1,
+        success_count: 1,
+        error_count: 0,
+        equity: '100',
+        margin: '50',
+        available_balance: '40',
+        unrealized_pnl: '0',
+        total_commission: '0',
+        distribution_apy_7d: '0',
+      },
+      groups: [{ ...basePayload().groups[0], main_account_name: 'Before Refresh' }],
+    }));
+
+    app.window.fetch = vi.fn(async (url) => {
+      const path = new URL(String(url), app.window.location.origin).pathname;
+      if (path === '/api/monitor/refresh') {
+        return {
+          ok: true,
+          json: async () => basePayload({
+            message: 'monitor refreshed',
+            updated_at: '2026-04-22T17:30:00+08:00',
+            refresh_result: { success: true },
+            summary: {
+              account_count: 1,
+              success_count: 1,
+              error_count: 0,
+              equity: '200',
+              margin: '80',
+              available_balance: '60',
+              unrealized_pnl: '20',
+              total_commission: '-1.2',
+              distribution_apy_7d: '0.01',
+            },
+            groups: [{ ...basePayload().groups[0], main_account_name: 'After Refresh' }],
+          }),
+        };
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    await app.api.refreshNow();
+
+    expect(app.document.getElementById('summaryCards').textContent).toContain('$200.00');
+    expect(app.document.getElementById('groupsContainer').textContent).toContain('After Refresh');
+    expect(app.document.getElementById('messageText').textContent).toContain('刷新成功');
+  });
+
+  it('keeps the current monitor cards in place when refresh only acknowledges the request and waits for the next snapshot', async () => {
+    const app = createApp();
+    apps.push(app);
+    app.api.resetTestState();
+
+    app.api.render(basePayload({
+      summary: {
+        account_count: 1,
+        success_count: 1,
+        error_count: 0,
+        equity: '321',
+        margin: '50',
+        available_balance: '40',
+        unrealized_pnl: '0',
+        total_commission: '0',
+        distribution_apy_7d: '0',
+      },
+      groups: [{ ...basePayload().groups[0], main_account_name: 'Stable Group' }],
+    }));
+
+    app.window.fetch = vi.fn(async (url) => {
+      const path = new URL(String(url), app.window.location.origin).pathname;
+      if (path === '/api/monitor/refresh') {
+        return {
+          ok: true,
+          json: async () => ({
+            message: 'Refresh completed',
+            refresh_result: { success: true },
+          }),
+        };
+      }
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    await app.api.refreshNow();
+
+    expect(app.document.getElementById('summaryCards').textContent).toContain('321.00');
+    expect(app.document.getElementById('groupsContainer').textContent).toContain('Stable Group');
+    expect(app.document.getElementById('messageText').textContent).toContain('等待新数据返回后自动更新');
   });
 
   it('renders cumulative distribution amounts in cards instead of 7-day rolling totals', () => {
@@ -840,6 +1176,17 @@ describe('monitor_v2.js', () => {
 
     expect(app.window.document.execCommand).toHaveBeenCalledWith('copy');
     expect(app.api.getFundingLogEntries()[0].message).toContain('已复制操作ID');
+  });
+
+  it('does not render the audit search input in the funding audit panel', () => {
+    const app = createApp();
+    apps.push(app);
+    app.api.resetTestState();
+
+    app.api.setFundingActiveLogTab('audit');
+
+    expect(app.document.querySelector('[data-funding-audit-filter]')).toBeNull();
+    expect(app.document.querySelector('.funding-audit-filter')).toBeNull();
   });
 
   it('requests audit detail with direction when operation ids are reused across modes', async () => {

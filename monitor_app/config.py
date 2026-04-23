@@ -245,6 +245,10 @@ class Settings(BaseSettings):
     binance_secondary_timeout_ms: int = 2_500
     binance_core_retry_attempts: int = 5
     binance_secondary_retry_attempts: int = 3
+    binance_manual_core_timeout_ms: int = 2_500
+    binance_manual_secondary_timeout_ms: int = 1_500
+    binance_manual_core_retry_attempts: int = 2
+    binance_manual_secondary_retry_attempts: int = 1
     funding_transfer_write_enabled: bool = True
     funding_max_accounts_per_operation: int = 20
     funding_max_total_amount_per_operation: Decimal = Decimal("10000")

@@ -1,0 +1,2303 @@
+:root {
+  --surface-base: #07090c;
+  --surface-deep: #0d1014;
+  --surface-elevated: rgba(16, 19, 24, 0.78);
+  --surface-strong: rgba(13, 15, 19, 0.92);
+  --surface-soft: rgba(255, 248, 235, 0.035);
+  --surface-active: rgba(207, 168, 96, 0.1);
+  --line-subtle: rgba(255, 255, 255, 0.07);
+  --line-strong: rgba(208, 172, 108, 0.32);
+  --line-soft-gold: rgba(208, 172, 108, 0.16);
+  --text-primary: #f4efe5;
+  --text-secondary: rgba(244, 239, 229, 0.72);
+  --text-tertiary: rgba(244, 239, 229, 0.46);
+  --text-strong: #f1d39a;
+  --text-gold: #d7b678;
+  --accent-gold: #caa66a;
+  --accent-gold-strong: #e0bd82;
+  --accent-gold-deep: #8f6b38;
+  --accent-gold-glow: rgba(214, 177, 107, 0.2);
+  --replica-metric-start: rgba(34, 37, 42, 0.985);
+  --replica-metric-end: rgba(22, 25, 30, 0.99);
+  --replica-strip-start: rgba(31, 34, 39, 0.985);
+  --replica-strip-end: rgba(21, 24, 29, 0.99);
+  --replica-gold-line: rgba(184, 145, 83, 0.26);
+  --replica-gold-line-soft: rgba(184, 145, 83, 0.22);
+  --replica-gold-highlight: rgba(230, 198, 137, 0.2);
+  --replica-gold-inner: rgba(230, 198, 137, 0.028);
+  --replica-danger: #e36c5d;
+  --success: #78c98c;
+  --success-strong: #8bd99d;
+  --success-surface: rgba(65, 140, 87, 0.18);
+  --warn: #d7a95b;
+  --warn-surface: rgba(163, 117, 43, 0.18);
+  --danger: #ff625d;
+  --danger-strong: #ff8274;
+  --danger-surface: rgba(176, 63, 56, 0.18);
+  --shadow-deep: 0 28px 72px rgba(0, 0, 0, 0.46);
+  --shadow-panel: 0 18px 46px rgba(0, 0, 0, 0.38);
+  --shadow-soft: 0 12px 30px rgba(0, 0, 0, 0.28);
+  --blur-panel: blur(20px) saturate(132%);
+  --radius-panel: 24px;
+  --radius-card: 16px;
+  --radius-pill: 999px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body.monitor-screen[data-theme="black-gold"] {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--text-primary);
+  font-family: "Segoe UI Variable Display", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  background:
+    radial-gradient(circle at 12% 12%, rgba(197, 155, 86, 0.16), transparent 0 24%),
+    radial-gradient(circle at 88% 24%, rgba(135, 102, 52, 0.1), transparent 0 26%),
+    linear-gradient(180deg, #0a0d11 0%, #06080b 38%, #040507 100%);
+  position: relative;
+  overflow-x: hidden;
+}
+
+body.monitor-screen[data-theme="black-gold"]::before,
+body.monitor-screen[data-theme="black-gold"]::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: -1;
+}
+
+body.monitor-screen[data-theme="black-gold"]::before {
+  background:
+    radial-gradient(circle at 70% 8%, rgba(208, 172, 108, 0.16), transparent 0 18%),
+    radial-gradient(circle at 18% 78%, rgba(208, 172, 108, 0.11), transparent 0 19%);
+  filter: blur(40px);
+  opacity: 0.75;
+}
+
+body.monitor-screen[data-theme="black-gold"]::after {
+  background:
+    radial-gradient(1100px 300px at 58% 2%, transparent 72%, rgba(226, 191, 129, 0.24) 73%, transparent 74%),
+    radial-gradient(900px 220px at 46% 100%, transparent 70%, rgba(184, 146, 84, 0.18) 71%, transparent 72%);
+  opacity: 0.78;
+}
+
+body.monitor-screen[data-theme="black-gold"] button,
+body.monitor-screen[data-theme="black-gold"] input,
+body.monitor-screen[data-theme="black-gold"] select {
+  font: inherit;
+}
+
+body.monitor-screen[data-theme="black-gold"] button:focus-visible,
+body.monitor-screen[data-theme="black-gold"] input:focus-visible,
+body.monitor-screen[data-theme="black-gold"] select:focus-visible {
+  outline: none;
+  border-color: rgba(229, 193, 133, 0.5);
+  box-shadow:
+    0 0 0 3px rgba(215, 182, 120, 0.14),
+    0 0 0 1px rgba(255, 226, 177, 0.06) inset;
+}
+
+body.monitor-screen[data-theme="black-gold"] .shell-monitor {
+  width: min(1360px, calc(100vw - 32px));
+  margin: 0 auto;
+  padding: 22px 0 40px;
+  position: relative;
+}
+
+body.monitor-screen[data-theme="black-gold"] .shell-monitor > * + * {
+  margin-top: 16px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .hero,
+body.monitor-screen[data-theme="black-gold"] .toolbar,
+body.monitor-screen[data-theme="black-gold"] .group,
+body.monitor-screen[data-theme="black-gold"] .account,
+body.monitor-screen[data-theme="black-gold"] .modal-panel,
+body.monitor-screen[data-theme="black-gold"] .funding-list-wrap,
+body.monitor-screen[data-theme="black-gold"] .funding-log-panel,
+body.monitor-screen[data-theme="black-gold"] .funding-audit-list,
+body.monitor-screen[data-theme="black-gold"] .funding-audit-detail {
+  background:
+    linear-gradient(180deg, rgba(28, 31, 38, 0.88) 0%, rgba(12, 15, 20, 0.9) 100%);
+  border: 1px solid var(--line-soft-gold);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 232, 187, 0.04),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.015),
+    var(--shadow-panel);
+  -webkit-backdrop-filter: var(--blur-panel);
+  backdrop-filter: var(--blur-panel);
+}
+
+body.monitor-screen[data-theme="black-gold"] .hero {
+  border-radius: 30px;
+  padding: 24px 28px;
+  overflow: hidden;
+  position: relative;
+  animation: surface-enter 620ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+body.monitor-screen[data-theme="black-gold"] .hero.hero-seamless {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  padding: 6px 2px 2px;
+  overflow: visible;
+}
+
+body.monitor-screen[data-theme="black-gold"] .hero.hero-seamless::before {
+  display: none;
+}
+
+body.monitor-screen[data-theme="black-gold"] .hero::before,
+body.monitor-screen[data-theme="black-gold"] .toolbar::before,
+body.monitor-screen[data-theme="black-gold"] .group::before,
+body.monitor-screen[data-theme="black-gold"] .modal-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(120deg, rgba(255, 222, 160, 0.06), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 40%);
+}
+
+body.monitor-screen[data-theme="black-gold"] .hero-head,
+body.monitor-screen[data-theme="black-gold"] .hero-title-row {
+  position: relative;
+  z-index: 1;
+}
+
+body.monitor-screen[data-theme="black-gold"] .hero h1 {
+  margin: 0;
+  font-size: clamp(32px, 3.7vw, 44px);
+  line-height: 1.02;
+  letter-spacing: -0.04em;
+  color: var(--text-primary);
+  text-shadow: 0 0 20px rgba(219, 183, 119, 0.1);
+}
+
+body.monitor-screen[data-theme="black-gold"] .hero p {
+  margin: 10px 0 0;
+  color: var(--text-gold);
+  font-size: 16px;
+  line-height: 1.45;
+  letter-spacing: 0.04em;
+}
+
+body.monitor-screen[data-theme="black-gold"] .hero.hero-seamless .hero-title-row {
+  align-items: center;
+}
+
+body.monitor-screen[data-theme="black-gold"] .hero.hero-seamless .hero-actions {
+  align-items: center;
+}
+
+body.monitor-screen[data-theme="black-gold"] .hero-actions,
+body.monitor-screen[data-theme="black-gold"] .hero-controls,
+body.monitor-screen[data-theme="black-gold"] .toolbar-main,
+body.monitor-screen[data-theme="black-gold"] .toolbar-meta,
+body.monitor-screen[data-theme="black-gold"] .toolbar-auth,
+body.monitor-screen[data-theme="black-gold"] .toolbar-stats,
+body.monitor-screen[data-theme="black-gold"] .group-actions,
+body.monitor-screen[data-theme="black-gold"] .group-badges,
+body.monitor-screen[data-theme="black-gold"] .account-head-actions,
+body.monitor-screen[data-theme="black-gold"] .funding-log-tabs {
+  gap: 10px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .toolbar {
+  position: relative;
+  overflow: hidden;
+  border-radius: 15px;
+  padding: 14px 20px;
+  border: 1px solid rgba(184, 145, 83, 0.34);
+  background:
+    radial-gradient(circle at 0.88px 0.88px, rgba(255, 255, 255, 0.022) 0 0.62px, transparent 0.68px 100%),
+    radial-gradient(circle at 3.1px 3.1px, rgba(0, 0, 0, 0.104) 0 0.42px, transparent 0.48px 100%),
+    linear-gradient(180deg, rgba(146, 104, 36, 0.03) 0%, rgba(146, 104, 36, 0.024) 52%, rgba(146, 104, 36, 0.018) 100%),
+    linear-gradient(90deg, rgba(124, 88, 30, 0.016) 0%, rgba(124, 88, 30, 0.018) 50%, rgba(124, 88, 30, 0.016) 100%),
+    linear-gradient(180deg, rgba(20, 23, 28, 0.997) 0%, rgba(8, 11, 16, 0.999) 100%);
+  background-size: 5.2px 5.2px, 5.2px 5.2px, auto, auto, auto;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.006),
+    inset 0 0 0 1px rgba(230, 198, 137, 0.042),
+    inset 0 -8px 16px rgba(0, 0, 0, 0.04),
+    0 2px 6px rgba(0, 0, 0, 0.08);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  animation: surface-enter 700ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: 60ms;
+}
+
+body.monitor-screen[data-theme="black-gold"] .toolbar::after,
+body.monitor-screen[data-theme="black-gold"] #profitCards.linked-strip::after {
+  content: "";
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  top: 0;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(230, 198, 137, 0.2), transparent);
+  opacity: 0.8;
+}
+
+body.monitor-screen[data-theme="black-gold"] #messageText {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 2px 0 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-gold);
+  letter-spacing: 0.01em;
+}
+
+body.monitor-screen[data-theme="black-gold"] .mono,
+body.monitor-screen[data-theme="black-gold"] #updatedAt,
+body.monitor-screen[data-theme="black-gold"] .group-subtitle,
+body.monitor-screen[data-theme="black-gold"] .account-subtitle {
+  font-family: "Cascadia Mono", "JetBrains Mono", "Consolas", monospace;
+}
+
+body.monitor-screen[data-theme="black-gold"] #updatedAt,
+body.monitor-screen[data-theme="black-gold"] .group-subtitle,
+body.monitor-screen[data-theme="black-gold"] .account-subtitle {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  letter-spacing: 0.03em;
+}
+
+body.monitor-screen[data-theme="black-gold"] .account-subtitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+body.monitor-screen[data-theme="black-gold"] .account-subtitle-id {
+  color: var(--text-secondary);
+}
+
+body.monitor-screen[data-theme="black-gold"] .account-subtitle-divider {
+  color: rgba(244, 239, 229, 0.44);
+}
+
+body.monitor-screen[data-theme="black-gold"] .account-subtitle-status.account-subtitle-status-ok {
+  font-family: "Segoe UI Variable Display", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--success-strong);
+}
+
+body.monitor-screen[data-theme="black-gold"] .account-subtitle-status.account-subtitle-status-error {
+  font-family: "Segoe UI Variable Display", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  color: var(--danger-strong);
+}
+
+body.monitor-screen[data-theme="black-gold"] .stat-pill,
+body.monitor-screen[data-theme="black-gold"] .badge,
+body.monitor-screen[data-theme="black-gold"] .group-unimmr-summary,
+body.monitor-screen[data-theme="black-gold"] .uni-mmr-indicator,
+body.monitor-screen[data-theme="black-gold"] .funding-log-badge {
+  border-radius: var(--radius-pill);
+}
+
+body.monitor-screen[data-theme="black-gold"] .stat-pill {
+  padding: 8px 12px;
+  border: 1px solid var(--line-subtle);
+  background: rgba(255, 250, 241, 0.035);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+body.monitor-screen[data-theme="black-gold"] .toolbar-stats {
+  isolation: isolate;
+}
+
+/* The toolbar stat pills need their own clipped material layer.
+   Otherwise the toolbar panel sheen bleeds through the rounded edges and reads as a square ghost. */
+body.monitor-screen[data-theme="black-gold"] .toolbar-stat-pill.toolbar-stat-pill-refined {
+  position: relative;
+  overflow: visible;
+  isolation: isolate;
+  z-index: 0;
+  padding: 8px 12px;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+body.monitor-screen[data-theme="black-gold"] .toolbar-stat-pill.toolbar-stat-pill-refined.toolbar-stat-pill-clipped {
+  contain: layout paint;
+}
+
+body.monitor-screen[data-theme="black-gold"] .toolbar-stat-pill.toolbar-stat-pill-refined > :not(.toolbar-stat-pill-surface) {
+  position: relative;
+  z-index: 1;
+}
+
+body.monitor-screen[data-theme="black-gold"] .toolbar-stat-pill-surface {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02) 0%, rgba(255, 255, 255, 0.004) 100%),
+    linear-gradient(180deg, rgba(184, 145, 83, 0.03) 0%, rgba(184, 145, 83, 0.01) 42%, transparent 100%),
+    rgba(10, 13, 18, 0.98);
+  border: 1px solid rgba(184, 145, 83, 0.14);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.024),
+    inset 0 0 0 1px rgba(230, 198, 137, 0.016),
+    0 4px 10px rgba(0, 0, 0, 0.1);
+  clip-path: inset(0 round 999px);
+  -webkit-clip-path: inset(0 round 999px);
+  -webkit-mask-image: -webkit-radial-gradient(white, black);
+  mask-image: radial-gradient(white, black);
+}
+
+body.monitor-screen[data-theme="black-gold"] .toolbar-stat-pill-surface::before {
+  content: none;
+}
+
+body.monitor-screen[data-theme="black-gold"] .stat-pill-label {
+  color: var(--text-tertiary);
+}
+
+body.monitor-screen[data-theme="black-gold"] .stat-pill-value {
+  font-weight: 700;
+  color: var(--text-gold);
+}
+
+body.monitor-screen[data-theme="black-gold"] .badge {
+  padding: 9px 14px;
+  border: 1px solid var(--line-soft-gold);
+  background:
+    linear-gradient(180deg, rgba(255, 222, 161, 0.07), rgba(255, 222, 161, 0.02)),
+    rgba(255, 255, 255, 0.015);
+  color: var(--text-gold);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 244, 220, 0.04),
+    0 8px 18px rgba(0, 0, 0, 0.18);
+}
+
+body.monitor-screen[data-theme="black-gold"] .badge::before {
+  width: 7px;
+  height: 7px;
+  box-shadow: 0 0 10px currentColor;
+}
+
+body.monitor-screen[data-theme="black-gold"] .badge.badge-status-reference.status-pill-reference {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  height: 26px;
+  gap: 8px;
+  padding: 0 11px;
+  border-radius: 999px;
+  color: var(--success-strong);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.035),
+    0 4px 12px rgba(0, 0, 0, 0.14);
+}
+
+body.monitor-screen[data-theme="black-gold"] .badge.badge-status-reference.status-pill-reference.status-pill-scaled {
+  min-height: 28px;
+  height: 28px;
+  padding: 0 12px;
+  font-size: 12px;
+  transform: translateY(2px);
+}
+
+body.monitor-screen[data-theme="black-gold"] .badge.badge-status-reference.status-pill-reference.status-pill-scaled.status-pill-scale-130 {
+  min-height: 34px;
+  height: 34px;
+  gap: 10px;
+  padding: 0 15px;
+  font-size: 14px;
+  transform: translateY(1px);
+}
+
+body.monitor-screen[data-theme="black-gold"] .badge.badge-status-reference.status-pill-reference.status-pill-scaled.status-pill-scale-130::before {
+  width: 10px;
+  height: 10px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .badge.badge-status-reference.status-pill-reference::before {
+  width: 8px;
+  height: 8px;
+  box-shadow: 0 0 10px currentColor;
+}
+
+body.monitor-screen[data-theme="black-gold"] .status-ok,
+body.monitor-screen[data-theme="black-gold"] .uni-mmr-good,
+body.monitor-screen[data-theme="black-gold"] .funding-log-badge.is-success {
+  color: var(--success-strong);
+  border-color: rgba(120, 201, 140, 0.26);
+  background:
+    linear-gradient(180deg, rgba(125, 200, 141, 0.18), rgba(125, 200, 141, 0.08)),
+    rgba(255, 255, 255, 0.015);
+}
+
+body.monitor-screen[data-theme="black-gold"] .status-partial,
+body.monitor-screen[data-theme="black-gold"] .uni-mmr-warn,
+body.monitor-screen[data-theme="black-gold"] .funding-log-badge.is-info {
+  color: var(--danger-strong);
+  border-color: rgba(255, 119, 111, 0.26);
+  background:
+    linear-gradient(180deg, rgba(255, 98, 93, 0.14), rgba(255, 98, 93, 0.05)),
+    rgba(255, 255, 255, 0.015);
+}
+
+body.monitor-screen[data-theme="black-gold"] .status-error,
+body.monitor-screen[data-theme="black-gold"] .uni-mmr-bad,
+body.monitor-screen[data-theme="black-gold"] .funding-log-badge.is-error {
+  color: var(--danger-strong);
+  border-color: rgba(255, 99, 92, 0.26);
+  background:
+    linear-gradient(180deg, rgba(255, 98, 93, 0.14), rgba(255, 98, 93, 0.05)),
+    rgba(255, 255, 255, 0.012);
+}
+
+body.monitor-screen[data-theme="black-gold"] .status-disabled {
+  color: var(--text-tertiary);
+  border-color: var(--line-subtle);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+body.monitor-screen[data-theme="black-gold"] .badge.badge-status-reference.status-pill-reference.status-ok {
+  color: var(--success-strong);
+  border-color: rgba(120, 211, 159, 0.1);
+  background: linear-gradient(180deg, rgba(50, 150, 94, 0.14) 0%, rgba(39, 114, 72, 0.1) 100%);
+}
+
+body.monitor-screen[data-theme="black-gold"] .badge.badge-status-reference.status-pill-reference.status-ok::before {
+  background: #44c97d;
+  box-shadow: 0 0 10px rgba(68, 201, 125, 0.42);
+}
+
+body.monitor-screen[data-theme="black-gold"] .badge.badge-status-reference.status-pill-reference.status-partial,
+body.monitor-screen[data-theme="black-gold"] .badge.badge-status-reference.status-pill-reference.status-error {
+  color: #f0a095;
+  border-color: rgba(227, 108, 93, 0.14);
+  background: linear-gradient(180deg, rgba(128, 44, 36, 0.16) 0%, rgba(95, 32, 26, 0.12) 100%);
+}
+
+body.monitor-screen[data-theme="black-gold"] .badge.badge-status-reference.status-pill-reference.status-partial::before,
+body.monitor-screen[data-theme="black-gold"] .badge.badge-status-reference.status-pill-reference.status-error::before {
+  background: var(--replica-danger);
+  box-shadow: 0 0 10px rgba(227, 108, 93, 0.38);
+}
+
+body.monitor-screen[data-theme="black-gold"] .badge.badge-status-reference.status-pill-reference[data-monitor-status="reconnecting"] {
+  color: #e2bc73;
+  border-color: rgba(214, 173, 94, 0.18);
+  background:
+    linear-gradient(180deg, rgba(216, 170, 91, 0.11), rgba(216, 170, 91, 0.03)),
+    rgba(16, 19, 24, 0.92);
+}
+
+body.monitor-screen[data-theme="black-gold"] .badge.badge-status-reference.status-pill-reference[data-monitor-status="reconnecting"]::before {
+  background: #e2bc73;
+  box-shadow: 0 0 10px rgba(226, 188, 115, 0.36);
+}
+
+body.monitor-screen[data-theme="black-gold"] .badge.badge-status-reference.status-pill-reference.status-disabled {
+  color: rgba(244, 239, 229, 0.56);
+  border-color: rgba(255, 255, 255, 0.08);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.012)),
+    rgba(16, 19, 24, 0.88);
+}
+
+body.monitor-screen[data-theme="black-gold"] .value-positive,
+body.monitor-screen[data-theme="black-gold"] .side-long {
+  color: var(--success-strong);
+}
+
+body.monitor-screen[data-theme="black-gold"] .value-negative,
+body.monitor-screen[data-theme="black-gold"] .side-short {
+  color: var(--danger);
+}
+
+body.monitor-screen[data-theme="black-gold"] .switch {
+  padding: 6px 8px;
+  border-color: var(--line-soft-gold);
+  background:
+    linear-gradient(180deg, rgba(255, 222, 161, 0.08), rgba(255, 222, 161, 0.02)),
+    rgba(15, 18, 23, 0.72);
+  box-shadow: inset 0 1px 0 rgba(255, 241, 213, 0.05);
+}
+
+body.monitor-screen[data-theme="black-gold"] #connectionBadge {
+  margin-top: 0;
+}
+
+body.monitor-screen[data-theme="black-gold"] .switch.switch-luxury {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+body.monitor-screen[data-theme="black-gold"] .switch-track {
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 1px 6px rgba(0, 0, 0, 0.45);
+}
+
+body.monitor-screen[data-theme="black-gold"] .switch.switch-luxury .switch-track {
+  width: 42px;
+  height: 24px;
+  border: 1px solid rgba(255, 243, 214, 0.14);
+  background:
+    linear-gradient(180deg, rgba(31, 35, 39, 0.96), rgba(13, 15, 18, 0.98));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.5),
+    0 6px 14px rgba(0, 0, 0, 0.26);
+}
+
+body.monitor-screen[data-theme="black-gold"] .switch.switch-luxury .switch-track::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  top: 2px;
+  bottom: 2px;
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, rgba(64, 171, 92, 0.96), rgba(32, 120, 58, 0.96));
+  box-shadow:
+    inset 0 1px 0 rgba(186, 243, 197, 0.28),
+    0 0 10px rgba(57, 157, 82, 0.16);
+  opacity: 1;
+  transition: opacity 180ms ease, filter 180ms ease;
+}
+
+body.monitor-screen[data-theme="black-gold"] .switch-track::after {
+  background: linear-gradient(180deg, #ffffff, #e6dcc6);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.36);
+}
+
+body.monitor-screen[data-theme="black-gold"] .switch.switch-luxury .switch-track::after {
+  top: 1px;
+  left: 1px;
+  width: 20px;
+  height: 20px;
+  background:
+    linear-gradient(180deg, #ffffff 0%, #f2efe7 52%, #d7d0c2 100%);
+  box-shadow:
+    0 3px 10px rgba(0, 0, 0, 0.36),
+    0 0 0 1px rgba(255, 255, 255, 0.4) inset;
+}
+
+body.monitor-screen[data-theme="black-gold"] .switch input:checked + .switch-track {
+  background: linear-gradient(90deg, rgba(76, 143, 89, 0.9), rgba(116, 198, 137, 0.9));
+}
+
+body.monitor-screen[data-theme="black-gold"] .switch.switch-luxury input:not(:checked) + .switch-track::before {
+  opacity: 0.18;
+  filter: saturate(0.6);
+}
+
+body.monitor-screen[data-theme="black-gold"] .switch.switch-luxury input:checked + .switch-track {
+  background:
+    linear-gradient(180deg, rgba(24, 29, 33, 0.96), rgba(10, 12, 15, 0.98));
+}
+
+body.monitor-screen[data-theme="black-gold"] .switch.switch-luxury input:checked + .switch-track::after {
+  transform: translateX(18px);
+}
+
+body.monitor-screen[data-theme="black-gold"] .switch.switch-luxury:hover .switch-track {
+  border-color: rgba(255, 245, 222, 0.22);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.56),
+    0 8px 18px rgba(0, 0, 0, 0.32);
+}
+
+body.monitor-screen[data-theme="black-gold"] .switch.switch-luxury.switch-reference .switch-track {
+  width: 44px;
+  height: 24px;
+  border: 0;
+  background: rgba(255, 255, 255, 0.075);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.04),
+    0 8px 18px rgba(0, 0, 0, 0.24);
+}
+
+body.monitor-screen[data-theme="black-gold"] .switch.switch-luxury.switch-reference.switch-scaled .switch-track {
+  width: 48px;
+  height: 26px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .switch.switch-luxury.switch-reference .switch-track::before {
+  content: none;
+}
+
+body.monitor-screen[data-theme="black-gold"] .switch.switch-luxury.switch-reference .switch-track::after {
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  background: linear-gradient(180deg, #f8f6f1 0%, #e8e1d5 100%);
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+body.monitor-screen[data-theme="black-gold"] .switch.switch-luxury.switch-reference.switch-scaled .switch-track::after {
+  width: 22px;
+  height: 22px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .switch.switch-luxury.switch-reference input:checked + .switch-track {
+  background: linear-gradient(180deg, #3b8f58 0%, #2c6f45 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.04),
+    0 6px 14px rgba(0, 0, 0, 0.22);
+}
+
+body.monitor-screen[data-theme="black-gold"] .switch.switch-luxury.switch-reference input:checked + .switch-track::after {
+  transform: translateX(20px);
+}
+
+body.monitor-screen[data-theme="black-gold"] .switch.switch-luxury.switch-reference.switch-scaled input:checked + .switch-track::after {
+  transform: translateX(22px);
+}
+
+body.monitor-screen[data-theme="black-gold"] .switch.switch-luxury.switch-reference:hover .switch-track {
+  border-color: transparent;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.04),
+    0 8px 18px rgba(0, 0, 0, 0.24);
+}
+
+body.monitor-screen[data-theme="black-gold"] .refresh-button,
+body.monitor-screen[data-theme="black-gold"] .group-toggle-button,
+body.monitor-screen[data-theme="black-gold"] .funding-max-button,
+body.monitor-screen[data-theme="black-gold"] .funding-log-tab,
+body.monitor-screen[data-theme="black-gold"] .segment-button,
+body.monitor-screen[data-theme="black-gold"] .modal-close {
+  border: 1px solid var(--line-soft-gold);
+  border-radius: var(--radius-pill);
+  background:
+    linear-gradient(180deg, rgba(255, 226, 168, 0.09), rgba(255, 226, 168, 0.02)),
+    rgba(12, 15, 19, 0.86);
+  color: var(--text-primary);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 237, 203, 0.06),
+    0 10px 18px rgba(0, 0, 0, 0.22);
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease,
+    background-color 180ms ease,
+    color 180ms ease;
+}
+
+body.monitor-screen[data-theme="black-gold"] .refresh-button,
+body.monitor-screen[data-theme="black-gold"] .group-toggle-button,
+body.monitor-screen[data-theme="black-gold"] .funding-log-tab {
+  padding: 9px 15px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+body.monitor-screen[data-theme="black-gold"] .hero-action-button-stretched {
+  min-width: 102px;
+  padding-left: 18px;
+  padding-right: 18px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .segment-button {
+  padding: 11px 16px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+body.monitor-screen[data-theme="black-gold"] .segment-button.is-active,
+body.monitor-screen[data-theme="black-gold"] .funding-log-tab.is-active {
+  color: var(--text-primary);
+  border-color: rgba(225, 191, 129, 0.5);
+  background:
+    linear-gradient(180deg, rgba(232, 195, 131, 0.22), rgba(164, 120, 55, 0.16)),
+    rgba(16, 18, 22, 0.94);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 238, 204, 0.1),
+    0 14px 22px rgba(0, 0, 0, 0.24),
+    0 0 24px rgba(205, 165, 97, 0.12);
+}
+
+body.monitor-screen[data-theme="black-gold"] .refresh-button:hover:not(:disabled),
+body.monitor-screen[data-theme="black-gold"] .group-toggle-button:hover:not(:disabled),
+body.monitor-screen[data-theme="black-gold"] .segment-button:hover:not(:disabled),
+body.monitor-screen[data-theme="black-gold"] .funding-max-button:hover:not(:disabled),
+body.monitor-screen[data-theme="black-gold"] .funding-log-tab:hover:not(:disabled) {
+  border-color: rgba(232, 198, 139, 0.42);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 238, 204, 0.07),
+    0 16px 26px rgba(0, 0, 0, 0.26),
+    0 0 18px rgba(209, 173, 108, 0.1);
+  transform: translateY(-1px);
+}
+
+body.monitor-screen[data-theme="black-gold"] .modal-close:hover:not(:disabled) {
+  border-color: rgba(232, 198, 139, 0.28);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 238, 204, 0.05),
+    0 10px 20px rgba(0, 0, 0, 0.24),
+    0 0 20px rgba(206, 167, 98, 0.1);
+  transform: none;
+}
+
+body.monitor-screen[data-theme="black-gold"] .refresh-button:disabled,
+body.monitor-screen[data-theme="black-gold"] .group-toggle-button:disabled,
+body.monitor-screen[data-theme="black-gold"] .segment-button:disabled,
+body.monitor-screen[data-theme="black-gold"] .funding-max-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+body.monitor-screen[data-theme="black-gold"] #fundingSubmitButton,
+body.monitor-screen[data-theme="black-gold"] #refreshButton,
+body.monitor-screen[data-theme="black-gold"] #fundingRefreshButton {
+  border-color: rgba(229, 193, 133, 0.48);
+}
+
+body.monitor-screen[data-theme="black-gold"] #fundingSubmitButton {
+  min-width: 180px;
+  min-height: 44px;
+  padding: 10px 24px;
+  border-radius: 18px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  background:
+    radial-gradient(circle at 50% 10%, rgba(232, 196, 132, 0.22), transparent 56%),
+    linear-gradient(180deg, rgba(112, 89, 48, 0.42) 0%, rgba(44, 34, 20, 0.88) 58%, rgba(14, 12, 10, 0.96) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 247, 224, 0.1),
+    inset 0 0 0 1px rgba(230, 198, 137, 0.03),
+    0 10px 18px rgba(0, 0, 0, 0.24),
+    0 0 18px rgba(206, 167, 98, 0.12);
+}
+
+body.monitor-screen[data-theme="black-gold"] #fundingSubmitButton:hover:not(:disabled) {
+  color: var(--text-primary);
+  background:
+    radial-gradient(circle at 50% 12%, rgba(238, 205, 146, 0.28), transparent 58%),
+    linear-gradient(180deg, rgba(128, 103, 56, 0.48) 0%, rgba(52, 40, 23, 0.9) 58%, rgba(16, 13, 10, 0.97) 100%);
+}
+
+body.monitor-screen[data-theme="black-gold"] .summary,
+body.monitor-screen[data-theme="black-gold"] .groups {
+  display: grid;
+  gap: 16px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .summary {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+body.monitor-screen[data-theme="black-gold"] .summary-card,
+body.monitor-screen[data-theme="black-gold"] .metric,
+body.monitor-screen[data-theme="black-gold"] .funding-stat,
+body.monitor-screen[data-theme="black-gold"] .funding-audit-detail-card,
+body.monitor-screen[data-theme="black-gold"] .funding-audit-result {
+  min-width: 0;
+  border-radius: var(--radius-card);
+  border: 1px solid var(--line-soft-gold);
+  background:
+    linear-gradient(180deg, rgba(255, 223, 165, 0.05), transparent 42%),
+    rgba(10, 13, 17, 0.84);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 242, 213, 0.05),
+    0 12px 24px rgba(0, 0, 0, 0.24);
+}
+
+body.monitor-screen[data-theme="black-gold"] .summary-card {
+  padding: 14px 16px 13px;
+  min-height: 92px;
+  display: grid;
+  align-content: space-between;
+  gap: 14px;
+  animation: surface-enter 720ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+body.monitor-screen[data-theme="black-gold"] .summary-card.summary-card-refined {
+  border-radius: 15px;
+}
+
+body.monitor-screen[data-theme="black-gold"] #summaryCards .summary-card.metric {
+  position: relative;
+  overflow: hidden;
+  padding: 16px 18px 15px;
+  min-height: 0;
+  gap: 0;
+  background:
+    radial-gradient(circle at 0.88px 0.88px, rgba(255, 255, 255, 0.022) 0 0.62px, transparent 0.68px 100%),
+    radial-gradient(circle at 3.1px 3.1px, rgba(0, 0, 0, 0.104) 0 0.42px, transparent 0.48px 100%),
+    linear-gradient(180deg, rgba(146, 104, 36, 0.03) 0%, rgba(146, 104, 36, 0.024) 52%, rgba(146, 104, 36, 0.018) 100%),
+    linear-gradient(90deg, rgba(124, 88, 30, 0.016) 0%, rgba(124, 88, 30, 0.018) 50%, rgba(124, 88, 30, 0.016) 100%),
+    linear-gradient(180deg, rgba(20, 23, 28, 0.997) 0%, rgba(8, 11, 16, 0.999) 100%);
+  background-size: 5.2px 5.2px, 5.2px 5.2px, auto, auto, auto;
+  border: 1px solid rgba(184, 145, 83, 0.34);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.006),
+    inset 0 0 0 1px rgba(230, 198, 137, 0.042),
+    inset 0 -8px 16px rgba(0, 0, 0, 0.04),
+    0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+body.monitor-screen[data-theme="black-gold"] #summaryCards .summary-card.metric.summary-card-proportional {
+  min-height: 0;
+  padding: 16px 18px 15px;
+}
+
+body.monitor-screen[data-theme="black-gold"] #summaryCards .summary-card.metric::before {
+  display: none;
+}
+
+body.monitor-screen[data-theme="black-gold"] #summaryCards .summary-card.metric::after {
+  content: "";
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  top: 0;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(230, 198, 137, 0.2), transparent);
+  opacity: 0.8;
+}
+
+body.monitor-screen[data-theme="black-gold"] .summary-card:nth-child(1) { animation-delay: 90ms; }
+body.monitor-screen[data-theme="black-gold"] .summary-card:nth-child(2) { animation-delay: 130ms; }
+body.monitor-screen[data-theme="black-gold"] .summary-card:nth-child(3) { animation-delay: 170ms; }
+body.monitor-screen[data-theme="black-gold"] .summary-card:nth-child(4) { animation-delay: 210ms; }
+body.monitor-screen[data-theme="black-gold"] .summary-card:nth-child(5) { animation-delay: 250ms; }
+body.monitor-screen[data-theme="black-gold"] .summary-card:nth-child(6) { animation-delay: 290ms; }
+
+body.monitor-screen[data-theme="black-gold"] .summary-card:hover,
+body.monitor-screen[data-theme="black-gold"] .metric:hover,
+body.monitor-screen[data-theme="black-gold"] .funding-audit-detail-card:hover {
+  border-color: rgba(233, 196, 136, 0.4);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 247, 224, 0.06),
+    0 18px 28px rgba(0, 0, 0, 0.28),
+    0 0 24px rgba(209, 173, 108, 0.07);
+}
+
+body.monitor-screen[data-theme="black-gold"] #summaryCards .summary-card.metric:hover {
+  border-color: rgba(184, 145, 83, 0.42);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.008),
+    inset 0 0 0 1px rgba(230, 198, 137, 0.05),
+    inset 0 -8px 16px rgba(0, 0, 0, 0.05),
+    0 4px 10px rgba(0, 0, 0, 0.1);
+}
+
+body.monitor-screen[data-theme="black-gold"] .group-summary .metric:hover,
+body.monitor-screen[data-theme="black-gold"] .account-grid .metric:hover {
+  border-color: var(--line-soft-gold);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 242, 213, 0.05),
+    0 12px 24px rgba(0, 0, 0, 0.24);
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-stat:hover {
+  border-color: rgba(184, 145, 83, 0.34);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.006),
+    inset 0 0 0 1px rgba(230, 198, 137, 0.042),
+    inset 0 -8px 16px rgba(0, 0, 0, 0.04),
+    0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+body.monitor-screen[data-theme="black-gold"] .label,
+body.monitor-screen[data-theme="black-gold"] .metric-label,
+body.monitor-screen[data-theme="black-gold"] .funding-stat-label,
+body.monitor-screen[data-theme="black-gold"] .profit-card-label {
+  color: var(--text-gold);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+body.monitor-screen[data-theme="black-gold"] .summary-card-value,
+body.monitor-screen[data-theme="black-gold"] .metric-value,
+body.monitor-screen[data-theme="black-gold"] .funding-stat-value,
+body.monitor-screen[data-theme="black-gold"] .profit-card-value {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.04em;
+}
+
+body.monitor-screen[data-theme="black-gold"] .summary-card-value:not(.value-positive):not(.value-negative),
+body.monitor-screen[data-theme="black-gold"] .metric-value:not(.value-positive):not(.value-negative),
+body.monitor-screen[data-theme="black-gold"] .funding-stat-value:not(.value-positive):not(.value-negative),
+body.monitor-screen[data-theme="black-gold"] .profit-card-value:not(.value-positive):not(.value-negative) {
+  color: var(--text-primary);
+}
+
+body.monitor-screen[data-theme="black-gold"] .summary-card-value {
+  font-size: clamp(16px, 1.95vw, 22px);
+  line-height: 1.08;
+}
+
+body.monitor-screen[data-theme="black-gold"] #summaryCards .metric-label {
+  position: relative;
+  z-index: 1;
+  margin-bottom: 12px;
+  color: var(--text-gold);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+body.monitor-screen[data-theme="black-gold"] #summaryCards .metric-label.metric-label-emphasis {
+  font-size: 13px;
+}
+
+body.monitor-screen[data-theme="black-gold"] #summaryCards .metric-value {
+  position: relative;
+  z-index: 1;
+  font-size: clamp(17px, 1.75vw, 22px);
+  font-weight: 700;
+  line-height: 1.02;
+  letter-spacing: -0.03em;
+  color: var(--text-primary);
+}
+
+body.monitor-screen[data-theme="black-gold"] #summaryCards .metric-value.metric-value-proportional {
+  font-size: clamp(19px, 2vw, 25px);
+  line-height: 1.05;
+}
+
+body.monitor-screen[data-theme="black-gold"] #summaryCards .metric-value.value-negative {
+  color: var(--replica-danger);
+}
+
+body.monitor-screen[data-theme="black-gold"] #summaryCards .metric-value.value-positive {
+  color: var(--success-strong);
+}
+
+body.monitor-screen[data-theme="black-gold"] .metric-value,
+body.monitor-screen[data-theme="black-gold"] .funding-stat-value {
+  font-size: clamp(18px, 2vw, 24px);
+  line-height: 1.15;
+}
+
+body.monitor-screen[data-theme="black-gold"] .profit-strip {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0;
+  padding: 0;
+  border-radius: 15px;
+  overflow: hidden;
+  border: 1px solid rgba(184, 145, 83, 0.34);
+  background:
+    radial-gradient(circle at 0.86px 0.86px, rgba(255, 255, 255, 0.021) 0 0.58px, transparent 0.64px 100%),
+    radial-gradient(circle at 3px 3px, rgba(0, 0, 0, 0.102) 0 0.4px, transparent 0.46px 100%),
+    linear-gradient(180deg, rgba(146, 104, 36, 0.03) 0%, rgba(146, 104, 36, 0.024) 52%, rgba(146, 104, 36, 0.018) 100%),
+    linear-gradient(90deg, rgba(124, 88, 30, 0.016) 0%, rgba(124, 88, 30, 0.018) 50%, rgba(124, 88, 30, 0.016) 100%),
+    linear-gradient(180deg, rgba(20, 23, 28, 0.997) 0%, rgba(8, 11, 16, 0.999) 100%);
+  background-size: 5px 5px, 5px 5px, auto, auto, auto;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.006),
+    inset 0 0 0 1px rgba(230, 198, 137, 0.042),
+    inset 0 -8px 16px rgba(0, 0, 0, 0.04),
+    0 2px 6px rgba(0, 0, 0, 0.08);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  animation: surface-enter 760ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: 180ms;
+}
+
+/* Replica linked strip:
+   one unified container with internal dividers, not five small independent cards. */
+body.monitor-screen[data-theme="black-gold"] #profitCards.linked-strip {
+  background:
+    radial-gradient(circle at 0.86px 0.86px, rgba(255, 255, 255, 0.021) 0 0.58px, transparent 0.64px 100%),
+    radial-gradient(circle at 3px 3px, rgba(0, 0, 0, 0.102) 0 0.4px, transparent 0.46px 100%),
+    linear-gradient(180deg, rgba(146, 104, 36, 0.03) 0%, rgba(146, 104, 36, 0.024) 52%, rgba(146, 104, 36, 0.018) 100%),
+    linear-gradient(90deg, rgba(124, 88, 30, 0.016) 0%, rgba(124, 88, 30, 0.018) 50%, rgba(124, 88, 30, 0.016) 100%),
+    linear-gradient(180deg, rgba(20, 23, 28, 0.997) 0%, rgba(8, 11, 16, 0.999) 100%);
+  background-size: 5px 5px, 5px 5px, auto, auto, auto;
+  border: 1px solid rgba(184, 145, 83, 0.34);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.006),
+    inset 0 0 0 1px rgba(230, 198, 137, 0.042),
+    inset 0 -8px 16px rgba(0, 0, 0, 0.04),
+    0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+body.monitor-screen[data-theme="black-gold"] #profitCards.linked-strip::before {
+  content: none;
+}
+
+body.monitor-screen[data-theme="black-gold"] .profit-strip:empty {
+  display: none;
+}
+
+body.monitor-screen[data-theme="black-gold"] .profit-card {
+  position: relative;
+  padding: 18px 20px;
+  min-height: 96px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+body.monitor-screen[data-theme="black-gold"] #profitCards .linked-cell {
+  min-height: 96px;
+  padding: 20px 22px 18px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .profit-card + .profit-card::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 18px;
+  bottom: 18px;
+  width: 1px;
+  background: linear-gradient(180deg, transparent, rgba(255, 234, 198, 0.16), transparent);
+}
+
+body.monitor-screen[data-theme="black-gold"] #profitCards .linked-cell + .linked-cell::before {
+  top: 16px;
+  bottom: 16px;
+  width: 2px;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(255, 236, 204, 0.28) 8%,
+    rgba(255, 236, 204, 0.72) 30%,
+    rgba(255, 236, 204, 0.92) 50%,
+    rgba(255, 236, 204, 0.72) 70%,
+    rgba(255, 236, 204, 0.28) 92%,
+    transparent 100%
+  );
+  box-shadow:
+    0 0 16px rgba(184, 145, 83, 0.2),
+    0 0 4px rgba(255, 236, 204, 0.26);
+  opacity: 1;
+}
+
+body.monitor-screen[data-theme="black-gold"] .profit-card-value {
+  margin-top: 10px;
+  font-size: clamp(18px, 2vw, 27px);
+  line-height: 1.1;
+}
+
+body.monitor-screen[data-theme="black-gold"] #profitCards .linked-label {
+  position: relative;
+  z-index: 1;
+  margin-bottom: 10px;
+  color: var(--text-gold);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+body.monitor-screen[data-theme="black-gold"] #profitCards .linked-label.linked-label-emphasis {
+  font-size: 13px;
+}
+
+body.monitor-screen[data-theme="black-gold"] #profitCards .linked-value {
+  position: relative;
+  z-index: 1;
+  margin-top: 0;
+  font-size: clamp(17px, 1.9vw, 25px);
+  line-height: 1.08;
+  letter-spacing: -0.02em;
+  color: var(--success-strong);
+}
+
+body.monitor-screen[data-theme="black-gold"] #profitCards .linked-value.value-negative {
+  color: var(--replica-danger);
+}
+
+body.monitor-screen[data-theme="black-gold"] .profit-card-note {
+  color: var(--text-tertiary);
+}
+
+body.monitor-screen[data-theme="black-gold"] .group {
+  position: relative;
+  overflow: hidden;
+  contain: layout paint style;
+  content-visibility: auto;
+  contain-intrinsic-size: 620px;
+  border-radius: 28px;
+  animation: surface-enter 800ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+body.monitor-screen[data-theme="black-gold"] .group-head {
+  padding: 22px 24px 18px;
+  background: linear-gradient(180deg, rgba(146, 104, 36, 0.006), rgba(146, 104, 36, 0));
+  border-bottom: 1px solid rgba(209, 173, 108, 0.12);
+}
+
+body.monitor-screen[data-theme="black-gold"] .group,
+body.monitor-screen[data-theme="black-gold"] .account {
+  background:
+    radial-gradient(circle at 0.94px 0.94px, rgba(214, 179, 111, 0.018) 0 0.58px, transparent 0.64px 100%),
+    radial-gradient(circle at 3px 3px, rgba(0, 0, 0, 0.11) 0 0.42px, transparent 0.48px 100%),
+    linear-gradient(180deg, rgba(146, 104, 36, 0.008) 0%, rgba(146, 104, 36, 0.005) 52%, rgba(146, 104, 36, 0.003) 100%),
+    linear-gradient(90deg, rgba(124, 88, 30, 0.004) 0%, rgba(124, 88, 30, 0.006) 50%, rgba(124, 88, 30, 0.004) 100%),
+    linear-gradient(180deg, rgba(20, 23, 28, 0.997) 0%, rgba(8, 11, 16, 0.999) 100%);
+  background-size: 5.2px 5.2px, 5.2px 5.2px, auto, auto, auto;
+  box-shadow:
+    inset 0 1px 0 rgba(214, 179, 111, 0.008),
+    inset 0 0 0 1px rgba(230, 198, 137, 0.016),
+    inset 0 -8px 16px rgba(0, 0, 0, 0.04),
+    0 2px 6px rgba(0, 0, 0, 0.08);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+body.monitor-screen[data-theme="black-gold"] .group::before {
+  content: none;
+}
+
+body.monitor-screen[data-theme="black-gold"] .group-title-block h2 {
+  margin: 0;
+  font-size: clamp(24px, 2.5vw, 34px);
+  line-height: 1;
+  letter-spacing: -0.04em;
+  color: var(--text-primary);
+}
+
+body.monitor-screen[data-theme="black-gold"] .group-title-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+body.monitor-screen[data-theme="black-gold"] .group-title-divider {
+  width: 1px;
+  height: 22px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(237, 211, 161, 0.08), rgba(237, 211, 161, 0.4), rgba(237, 211, 161, 0.08));
+  box-shadow: 0 0 8px rgba(214, 179, 111, 0.08);
+  opacity: 0.9;
+}
+
+body.monitor-screen[data-theme="black-gold"] .group-subtitle-inline {
+  display: inline-flex;
+  align-items: center;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1;
+  transform: translateY(1px);
+}
+
+body.monitor-screen[data-theme="black-gold"] .group-title-badges {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+body.monitor-screen[data-theme="black-gold"] .group-badges {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+body.monitor-screen[data-theme="black-gold"] .group-unimmr-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .group-header-pill {
+  min-height: 34px;
+  height: 34px;
+  padding: 0 14px;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  transform: none;
+}
+
+body.monitor-screen[data-theme="black-gold"] .group-unimmr-pill {
+  padding-right: 16px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .group-status-pill.badge.badge-status-reference.status-pill-reference,
+body.monitor-screen[data-theme="black-gold"] .group-unimmr-summary.badge.badge-status-reference.status-pill-reference,
+body.monitor-screen[data-theme="black-gold"] .account-head-actions .badge.badge-status-reference.status-pill-reference.account-header-pill,
+body.monitor-screen[data-theme="black-gold"] .uni-mmr-indicator.account-header-pill {
+  border-color: transparent;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+body.monitor-screen[data-theme="black-gold"] .group-unimmr-summary.badge.badge-status-reference.status-pill-reference.uni-mmr-good,
+body.monitor-screen[data-theme="black-gold"] .uni-mmr-indicator.account-header-pill.uni-mmr-good {
+  color: var(--success-strong);
+  background: linear-gradient(180deg, rgba(50, 150, 94, 0.14) 0%, rgba(39, 114, 72, 0.1) 100%);
+}
+
+body.monitor-screen[data-theme="black-gold"] .group-unimmr-summary.badge.badge-status-reference.status-pill-reference.uni-mmr-warn,
+body.monitor-screen[data-theme="black-gold"] .group-unimmr-summary.badge.badge-status-reference.status-pill-reference.uni-mmr-bad,
+body.monitor-screen[data-theme="black-gold"] .uni-mmr-indicator.account-header-pill.uni-mmr-warn,
+body.monitor-screen[data-theme="black-gold"] .uni-mmr-indicator.account-header-pill.uni-mmr-bad {
+  color: #f0a095;
+  background: linear-gradient(180deg, rgba(128, 44, 36, 0.16) 0%, rgba(95, 32, 26, 0.12) 100%);
+}
+
+body.monitor-screen[data-theme="black-gold"] .group-unimmr-label {
+  color: rgba(244, 239, 229, 0.7);
+  font-weight: 700;
+}
+
+body.monitor-screen[data-theme="black-gold"] .group-unimmr-item {
+  font-weight: 700;
+}
+
+body.monitor-screen[data-theme="black-gold"] .group-unimmr-item-good {
+  color: var(--success-strong);
+}
+
+body.monitor-screen[data-theme="black-gold"] .group-unimmr-item-warn,
+body.monitor-screen[data-theme="black-gold"] .group-unimmr-item-bad {
+  color: var(--danger-strong);
+}
+
+body.monitor-screen[data-theme="black-gold"] .account-head-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+body.monitor-screen[data-theme="black-gold"] .account-header-pill {
+  min-height: 34px;
+  height: 34px;
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+}
+
+body.monitor-screen[data-theme="black-gold"] .account-head-actions .badge.account-header-pill {
+  gap: 8px;
+  padding: 0 14px;
+  font-size: 13px;
+  transform: none;
+}
+
+body.monitor-screen[data-theme="black-gold"] .account-head-actions .badge.account-header-pill::before {
+  width: 9px;
+  height: 9px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .uni-mmr-indicator.account-header-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 14px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+body.monitor-screen[data-theme="black-gold"] .group-toggle-button {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+body.monitor-screen[data-theme="black-gold"] .group-summary,
+body.monitor-screen[data-theme="black-gold"] .account-grid {
+  padding: 18px 22px;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+body.monitor-screen[data-theme="black-gold"] .account-switcher {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 11px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .account-list {
+  padding: 0 22px 22px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .account-switch-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+  min-width: 136px;
+  height: 52px;
+  min-height: 52px;
+  padding: 0 20px;
+  border: 1px solid rgba(184, 145, 83, 0.22);
+  border-radius: 15px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.018) 0%, rgba(255, 255, 255, 0.004) 100%),
+    linear-gradient(180deg, rgba(184, 145, 83, 0.04) 0%, rgba(184, 145, 83, 0.016) 44%, rgba(184, 145, 83, 0.008) 100%),
+    linear-gradient(180deg, rgba(27, 30, 35, 0.98) 0%, rgba(14, 17, 22, 0.985) 100%);
+  color: var(--text-primary);
+  font-size: clamp(18px, 1.62vw, 21px);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  vertical-align: middle;
+  cursor: pointer;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 241, 213, 0.04),
+    inset 0 0 0 1px rgba(230, 198, 137, 0.018),
+    0 12px 24px rgba(0, 0, 0, 0.18);
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    background-color 180ms ease,
+    color 180ms ease;
+}
+
+body.monitor-screen[data-theme="black-gold"] .account-switch-button::before {
+  content: "";
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  top: 0;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(230, 198, 137, 0.14), transparent);
+  opacity: 0.72;
+}
+
+body.monitor-screen[data-theme="black-gold"] .account-switch-button.is-active {
+  color: var(--text-primary);
+  border-color: rgba(233, 196, 136, 0.5);
+  background:
+    radial-gradient(circle at 12% 10%, rgba(247, 220, 168, 0.34), transparent 34%),
+    linear-gradient(180deg, rgba(255, 226, 170, 0.26) 0%, rgba(186, 133, 61, 0.14) 54%, rgba(47, 38, 25, 0.92) 100%),
+    linear-gradient(180deg, rgba(58, 52, 42, 0.98) 0%, rgba(26, 24, 21, 0.985) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 241, 213, 0.16),
+    inset 0 0 0 1px rgba(255, 226, 177, 0.04),
+    0 14px 26px rgba(0, 0, 0, 0.22),
+    0 0 18px rgba(206, 167, 98, 0.12);
+}
+
+body.monitor-screen[data-theme="black-gold"] .account-switch-button.is-active::before {
+  background: linear-gradient(90deg, rgba(255, 229, 178, 0.12), rgba(255, 241, 212, 0.88), rgba(255, 229, 178, 0.12));
+  opacity: 1;
+}
+
+body.monitor-screen[data-theme="black-gold"] .account-switch-button:focus-visible {
+  border-color: rgba(233, 196, 136, 0.42);
+  box-shadow:
+    0 0 0 3px rgba(215, 182, 120, 0.12),
+    inset 0 1px 0 rgba(255, 241, 213, 0.06),
+    inset 0 0 0 1px rgba(230, 198, 137, 0.02),
+    0 12px 24px rgba(0, 0, 0, 0.2);
+}
+
+body.monitor-screen[data-theme="black-gold"] .account {
+  border-radius: 22px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .account-head {
+  padding: 20px 22px;
+  border-bottom: 1px solid rgba(209, 173, 108, 0.1);
+}
+
+body.monitor-screen[data-theme="black-gold"] .account-head h3 {
+  margin: 0;
+  font-size: clamp(24px, 2.5vw, 34px);
+  line-height: 1.02;
+  letter-spacing: -0.04em;
+}
+
+body.monitor-screen[data-theme="black-gold"] .account-title-block {
+  display: grid;
+  gap: 8px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .metric {
+  padding: 14px 16px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .section {
+  padding: 0 22px 22px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .section + .section {
+  padding-top: 8px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .section h4 {
+  margin: 0 0 14px;
+  font-size: 15px;
+  color: var(--text-gold);
+  letter-spacing: 0.04em;
+}
+
+body.monitor-screen[data-theme="black-gold"] table {
+  width: 100%;
+  border-collapse: collapse;
+  background: transparent;
+  font-size: 14px;
+  table-layout: fixed;
+}
+
+body.monitor-screen[data-theme="black-gold"] th,
+body.monitor-screen[data-theme="black-gold"] td {
+  padding: 14px 12px;
+  text-align: left;
+  border-bottom: 1px solid rgba(209, 173, 108, 0.08);
+  color: var(--text-primary);
+}
+
+body.monitor-screen[data-theme="black-gold"] th {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+body.monitor-screen[data-theme="black-gold"] tbody tr:hover td {
+  background: rgba(255, 226, 168, 0.025);
+}
+
+body.monitor-screen[data-theme="black-gold"] .empty {
+  color: var(--text-tertiary);
+  padding: 14px 0;
+}
+
+body.monitor-screen[data-theme="black-gold"] .modal-shell {
+  padding: 20px;
+  z-index: 70;
+}
+
+body.monitor-screen[data-theme="black-gold"] .modal-backdrop {
+  background:
+    radial-gradient(circle at 50% 10%, rgba(216, 176, 104, 0.08), transparent 0 28%),
+    rgba(4, 6, 8, 0.72);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+body.monitor-screen[data-theme="black-gold"] .modal-panel {
+  width: min(1400px, calc(100vw - 30px));
+  max-height: min(1050px, calc(100vh - 12px));
+  border-radius: 28px;
+  animation: modal-enter 240ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+body.monitor-screen[data-theme="black-gold"] .modal-head,
+body.monitor-screen[data-theme="black-gold"] .modal-foot {
+  border-color: rgba(209, 173, 108, 0.1);
+}
+
+body.monitor-screen[data-theme="black-gold"] .modal-head {
+  padding: 22px 28px 18px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .modal-head h2 {
+  font-size: clamp(22px, 2vw, 26px);
+  line-height: 1.02;
+  letter-spacing: -0.03em;
+  color: var(--text-primary);
+}
+
+body.monitor-screen[data-theme="black-gold"] #fundingRefreshButton {
+  min-height: 34px;
+  min-width: 102px;
+  padding: 9px 15px;
+  font-size: 13px;
+  font-weight: 700;
+  justify-content: center;
+}
+
+body.monitor-screen[data-theme="black-gold"] .modal-body {
+  padding: 18px 28px 22px;
+  gap: 12px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .modal-foot {
+  padding: 8px 28px 24px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .modal-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  padding: 0;
+  border-radius: 999px;
+  font-size: 0;
+  line-height: 1;
+  color: var(--text-gold);
+  background:
+    radial-gradient(circle at 50% 32%, rgba(218, 183, 112, 0.14), transparent 62%),
+    linear-gradient(180deg, rgba(255, 226, 168, 0.05), rgba(255, 226, 168, 0.012)),
+    rgba(15, 18, 23, 0.92);
+  border-color: rgba(184, 145, 83, 0.24);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 238, 204, 0.04),
+    0 8px 18px rgba(0, 0, 0, 0.22),
+    0 0 16px rgba(206, 167, 98, 0.08);
+}
+
+body.monitor-screen[data-theme="black-gold"] .modal-close::before {
+  content: "×";
+  display: block;
+  font-size: 26px;
+  line-height: 1;
+  transform: translateY(-2px);
+}
+
+body.monitor-screen[data-theme="black-gold"] .field {
+  gap: 10px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .field span {
+  color: var(--text-gold);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+body.monitor-screen[data-theme="black-gold"] .field select,
+body.monitor-screen[data-theme="black-gold"] .funding-amount-input,
+body.monitor-screen[data-theme="black-gold"] .funding-audit-filter {
+  border: 1px solid var(--line-soft-gold);
+  border-radius: 16px;
+  background:
+    linear-gradient(180deg, rgba(255, 226, 168, 0.07), rgba(255, 226, 168, 0.015)),
+    rgba(8, 11, 15, 0.92);
+  color: var(--text-primary);
+  box-shadow: inset 0 1px 0 rgba(255, 241, 213, 0.04);
+}
+
+body.monitor-screen[data-theme="black-gold"] .field select {
+  min-height: 52px;
+  padding: 11px 44px 11px 16px;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, rgba(244, 239, 229, 0.92) 50%),
+    linear-gradient(135deg, rgba(244, 239, 229, 0.92) 50%, transparent 50%),
+    linear-gradient(180deg, rgba(255, 226, 168, 0.07), rgba(255, 226, 168, 0.015)),
+    linear-gradient(180deg, rgba(8, 11, 15, 0.92), rgba(8, 11, 15, 0.92));
+  background-position:
+    calc(100% - 24px) calc(50% - 2px),
+    calc(100% - 18px) calc(50% - 2px),
+    0 0,
+    0 0;
+  background-size:
+    7px 7px,
+    7px 7px,
+    100% 100%,
+    100% 100%;
+  background-repeat: no-repeat;
+}
+
+body.monitor-screen[data-theme="black-gold"] .segmented {
+  padding: 3px;
+  gap: 3px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--line-soft-gold);
+  background:
+    linear-gradient(180deg, rgba(255, 226, 168, 0.035), rgba(255, 226, 168, 0.008)),
+    rgba(9, 12, 15, 0.9);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 241, 213, 0.02),
+    inset 0 0 0 1px rgba(230, 198, 137, 0.012);
+}
+
+body.monitor-screen[data-theme="black-gold"] .field > .segmented {
+  min-height: 58px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .segment-button {
+  min-height: 50px;
+  padding: 0 18px;
+  border-radius: 999px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+body.monitor-screen[data-theme="black-gold"] .segment-button.is-active {
+  background:
+    radial-gradient(circle at 18% 50%, rgba(241, 208, 146, 0.22), transparent 28%),
+    linear-gradient(180deg, rgba(132, 106, 58, 0.42), rgba(60, 46, 24, 0.9));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 238, 204, 0.08),
+    0 8px 18px rgba(0, 0, 0, 0.2),
+    0 0 22px rgba(205, 165, 97, 0.12);
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-main-card {
+  margin: 8px 0 12px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-main-grid {
+  gap: 14px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-stat {
+  position: relative;
+  overflow: hidden;
+  min-height: 92px;
+  padding: 16px 18px 15px;
+  display: grid;
+  align-content: center;
+  gap: 10px;
+  border-radius: 15px;
+  border: 1px solid rgba(184, 145, 83, 0.34);
+  background:
+    radial-gradient(circle at 0.88px 0.88px, rgba(255, 255, 255, 0.022) 0 0.62px, transparent 0.68px 100%),
+    radial-gradient(circle at 3.1px 3.1px, rgba(0, 0, 0, 0.104) 0 0.42px, transparent 0.48px 100%),
+    linear-gradient(180deg, rgba(146, 104, 36, 0.03) 0%, rgba(146, 104, 36, 0.024) 52%, rgba(146, 104, 36, 0.018) 100%),
+    linear-gradient(90deg, rgba(124, 88, 30, 0.016) 0%, rgba(124, 88, 30, 0.018) 50%, rgba(124, 88, 30, 0.016) 100%),
+    linear-gradient(180deg, rgba(20, 23, 28, 0.997) 0%, rgba(8, 11, 16, 0.999) 100%);
+  background-size: 5.2px 5.2px, 5.2px 5.2px, auto, auto, auto;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.006),
+    inset 0 0 0 1px rgba(230, 198, 137, 0.042),
+    inset 0 -8px 16px rgba(0, 0, 0, 0.04),
+    0 2px 6px rgba(0, 0, 0, 0.08);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-identity-card {
+  background:
+    radial-gradient(circle at 0.88px 0.88px, rgba(255, 255, 255, 0.022) 0 0.62px, transparent 0.68px 100%),
+    radial-gradient(circle at 3.1px 3.1px, rgba(0, 0, 0, 0.104) 0 0.42px, transparent 0.48px 100%),
+    linear-gradient(180deg, rgba(146, 104, 36, 0.03) 0%, rgba(146, 104, 36, 0.024) 52%, rgba(146, 104, 36, 0.018) 100%),
+    linear-gradient(90deg, rgba(124, 88, 30, 0.016) 0%, rgba(124, 88, 30, 0.018) 50%, rgba(124, 88, 30, 0.016) 100%),
+    linear-gradient(180deg, rgba(20, 23, 28, 0.997) 0%, rgba(8, 11, 16, 0.999) 100%);
+  background-size: 5.2px 5.2px, 5.2px 5.2px, auto, auto, auto;
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-stat::after {
+  content: "";
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  top: 0;
+  height: 1px;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, rgba(230, 198, 137, 0.2), transparent);
+  opacity: 0.8;
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-stat-label {
+  position: relative;
+  z-index: 1;
+  margin-bottom: 0;
+  color: var(--text-gold);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-stat-value {
+  position: relative;
+  z-index: 1;
+  line-height: 1.08;
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-max-button {
+  min-height: 34px;
+  padding: 0 14px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-gold);
+  border-color: rgba(184, 145, 83, 0.28);
+  background:
+    linear-gradient(180deg, rgba(255, 226, 168, 0.05), rgba(255, 226, 168, 0.012)),
+    rgba(12, 15, 19, 0.88);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 237, 203, 0.04),
+    0 8px 16px rgba(0, 0, 0, 0.18);
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-max-button:hover:not(:disabled) {
+  border-color: rgba(232, 198, 139, 0.34);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 238, 204, 0.05),
+    0 10px 18px rgba(0, 0, 0, 0.2),
+    0 0 12px rgba(209, 173, 108, 0.08);
+  transform: none;
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-identity-title {
+  font-size: clamp(24px, 2.2vw, 34px);
+  line-height: 1;
+  letter-spacing: -0.04em;
+  color: var(--text-primary);
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-identity-meta,
+body.monitor-screen[data-theme="black-gold"] .funding-log-latest {
+  color: var(--text-tertiary);
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-list-wrap,
+body.monitor-screen[data-theme="black-gold"] .funding-log-panel,
+body.monitor-screen[data-theme="black-gold"] .funding-audit-list,
+body.monitor-screen[data-theme="black-gold"] .funding-audit-detail {
+  background:
+    linear-gradient(180deg, rgba(255, 228, 171, 0.04), rgba(255, 228, 171, 0.01)),
+    rgba(8, 11, 15, 0.92);
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-list-wrap {
+  border-radius: 24px;
+  padding-bottom: 44px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-table thead th {
+  background: rgba(12, 15, 20, 0.97);
+  color: var(--text-gold);
+  box-shadow: inset 0 -1px 0 rgba(209, 173, 108, 0.12);
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-table td:last-child {
+  color: var(--success-strong);
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-table tbody tr.is-disabled td:last-child {
+  color: var(--text-tertiary);
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-table input[type="checkbox"],
+body.monitor-screen[data-theme="black-gold"] .funding-select-all input,
+body.monitor-screen[data-theme="black-gold"] .funding-sync-toggle input {
+  accent-color: var(--accent-gold);
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-log-head,
+body.monitor-screen[data-theme="black-gold"] .funding-audit-toolbar {
+  border-color: rgba(209, 173, 108, 0.1);
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-log-entry + .funding-log-entry,
+body.monitor-screen[data-theme="black-gold"] .funding-audit-item + .funding-audit-item {
+  border-top-color: rgba(209, 173, 108, 0.08);
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-log-time,
+body.monitor-screen[data-theme="black-gold"] .funding-audit-item-head {
+  color: var(--text-tertiary);
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-log-message,
+body.monitor-screen[data-theme="black-gold"] .funding-audit-item-message {
+  color: var(--text-primary);
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-audit-item {
+  transition: background-color 160ms ease;
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-audit-item:hover,
+body.monitor-screen[data-theme="black-gold"] .funding-audit-item.is-selected {
+  background: rgba(255, 228, 171, 0.04);
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-audit-detail-head strong {
+  color: var(--text-primary);
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-audit-detail-card span,
+body.monitor-screen[data-theme="black-gold"] .funding-audit-result-meta {
+  color: var(--text-secondary);
+}
+
+body.monitor-screen[data-theme="black-gold"] .card-note {
+  color: var(--text-tertiary);
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-log-empty {
+  color: var(--text-tertiary);
+}
+
+body.monitor-screen[data-theme="black-gold"] .modal-head h2 {
+  font-size: clamp(18px, 1.85vw, 22px);
+}
+
+body.monitor-screen[data-theme="black-gold"] .modal-body {
+  gap: 8px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .modal-close::before {
+  content: "\00d7";
+  font-size: 30px;
+  transform: translateY(-4px);
+}
+
+body.monitor-screen[data-theme="black-gold"] #fundingRefreshButton,
+body.monitor-screen[data-theme="black-gold"] #fundingSubmitButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 102px;
+  min-height: 34px;
+  padding: 9px 15px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+body.monitor-screen[data-theme="black-gold"] #fundingSubmitButton {
+  background:
+    linear-gradient(180deg, rgba(255, 226, 168, 0.09), rgba(255, 226, 168, 0.02)),
+    rgba(12, 15, 19, 0.86);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 237, 203, 0.06),
+    0 10px 18px rgba(0, 0, 0, 0.22);
+}
+
+body.monitor-screen[data-theme="black-gold"] #fundingSubmitButton:hover:not(:disabled) {
+  background:
+    linear-gradient(180deg, rgba(255, 226, 168, 0.11), rgba(255, 226, 168, 0.028)),
+    rgba(12, 15, 19, 0.9);
+}
+
+body.monitor-screen[data-theme="black-gold"] #fundingOperationCopyButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 82px;
+  min-height: 30px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1;
+}
+
+body.monitor-screen[data-theme="black-gold"] .modal-actions-center {
+  gap: 4px;
+  transform: translateY(-8px);
+}
+
+body.monitor-screen[data-theme="black-gold"] .modal-actions-meta-row {
+  gap: 10px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .field select {
+  background-position:
+    calc(100% - 29px) calc(50% - 2px),
+    calc(100% - 23px) calc(50% - 2px),
+    0 0,
+    0 0;
+}
+
+body.monitor-screen[data-theme="black-gold"] .segmented {
+  padding: 4px;
+  gap: 4px;
+  border-radius: 999px;
+  border: 1px solid rgba(184, 145, 83, 0.18);
+  background:
+    linear-gradient(180deg, rgba(255, 226, 168, 0.028), rgba(255, 226, 168, 0.006)),
+    rgba(10, 13, 17, 0.94);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 241, 213, 0.018),
+    inset 0 0 0 1px rgba(230, 198, 137, 0.01);
+}
+
+body.monitor-screen[data-theme="black-gold"] .field > .segmented {
+  min-height: 56px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .segment-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 46px;
+  padding: 0 22px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: none;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1;
+  color: rgba(244, 239, 229, 0.72);
+}
+
+body.monitor-screen[data-theme="black-gold"] .segment-button.is-active {
+  color: var(--text-primary);
+  background:
+    radial-gradient(circle at 18% 50%, rgba(241, 208, 146, 0.22), transparent 32%),
+    linear-gradient(180deg, rgba(136, 109, 61, 0.52), rgba(65, 49, 27, 0.94));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 238, 204, 0.08),
+    inset 0 0 0 1px rgba(226, 191, 129, 0.28),
+    0 8px 18px rgba(0, 0, 0, 0.2),
+    0 0 20px rgba(205, 165, 97, 0.1);
+}
+
+body.monitor-screen[data-theme="black-gold"] .segment-button:hover:not(:disabled) {
+  transform: none;
+  border-color: transparent;
+  box-shadow: none;
+  background: transparent;
+}
+
+body.monitor-screen[data-theme="black-gold"] .segment-button.is-active:hover:not(:disabled) {
+  background:
+    radial-gradient(circle at 18% 50%, rgba(241, 208, 146, 0.24), transparent 32%),
+    linear-gradient(180deg, rgba(140, 113, 65, 0.54), rgba(68, 52, 29, 0.95));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 238, 204, 0.08),
+    inset 0 0 0 1px rgba(226, 191, 129, 0.28),
+    0 8px 18px rgba(0, 0, 0, 0.2),
+    0 0 20px rgba(205, 165, 97, 0.1);
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-main-card {
+  margin: 4px 0 6px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-main-grid {
+  gap: 12px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-identity-head {
+  gap: 14px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-identity-content {
+  display: grid;
+  align-content: center;
+  gap: 10px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-identity-title {
+  font-size: clamp(20px, 1.9vw, 28px);
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-identity-meta {
+  margin-top: 0;
+  line-height: 1;
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-list-wrap {
+  padding-bottom: 0;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.004),
+    inset 0 0 0 1px rgba(230, 198, 137, 0.024),
+    0 2px 6px rgba(0, 0, 0, 0.08);
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-list-body {
+  min-height: 0;
+  height: min(472px, 55vh);
+  max-height: min(472px, 55vh);
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-list-body::-webkit-scrollbar {
+  width: 8px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-list-body::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(184, 145, 83, 0.34);
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-table tbody tr.funding-table-spacer td {
+  height: 0;
+  padding: 0;
+  border-bottom: 0;
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-audit-shell {
+  grid-template-rows: 1fr;
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-audit-toolbar,
+body.monitor-screen[data-theme="black-gold"] .funding-audit-filter {
+  display: none;
+}
+
+body.monitor-screen[data-theme="black-gold"] .group,
+body.monitor-screen[data-theme="black-gold"] .account {
+  background:
+    radial-gradient(circle at 0.9px 0.9px, rgba(214, 179, 111, 0.012) 0 0.5px, transparent 0.56px 100%),
+    radial-gradient(circle at 2.8px 2.8px, rgba(0, 0, 0, 0.12) 0 0.38px, transparent 0.44px 100%),
+    linear-gradient(180deg, rgba(146, 104, 36, 0.005) 0%, rgba(146, 104, 36, 0.003) 52%, rgba(146, 104, 36, 0.002) 100%),
+    linear-gradient(90deg, rgba(124, 88, 30, 0.003) 0%, rgba(124, 88, 30, 0.004) 50%, rgba(124, 88, 30, 0.003) 100%),
+    linear-gradient(180deg, rgba(14, 17, 22, 0.998) 0%, rgba(4, 7, 11, 0.999) 100%);
+  background-size: 5px 5px, 5px 5px, auto, auto, auto;
+}
+
+body.monitor-screen[data-theme="black-gold"] .group-title-block h2 {
+  font-size: clamp(21px, 2.15vw, 29px);
+}
+
+body.monitor-screen[data-theme="black-gold"] .account-head h3 {
+  font-size: clamp(22px, 2.2vw, 30px);
+}
+
+body.monitor-screen[data-theme="black-gold"] .account-switch-button {
+  padding: 0 20px 2px;
+}
+
+@supports not ((-webkit-backdrop-filter: blur(12px)) or (backdrop-filter: blur(12px))) {
+  body.monitor-screen[data-theme="black-gold"] .hero,
+  body.monitor-screen[data-theme="black-gold"] .toolbar,
+  body.monitor-screen[data-theme="black-gold"] .group,
+  body.monitor-screen[data-theme="black-gold"] .account,
+  body.monitor-screen[data-theme="black-gold"] .modal-panel,
+  body.monitor-screen[data-theme="black-gold"] .funding-list-wrap,
+  body.monitor-screen[data-theme="black-gold"] .funding-log-panel,
+  body.monitor-screen[data-theme="black-gold"] .funding-audit-list,
+  body.monitor-screen[data-theme="black-gold"] .funding-audit-detail,
+  body.monitor-screen[data-theme="black-gold"] .profit-strip {
+    background: rgba(12, 15, 19, 0.96);
+  }
+}
+
+@keyframes surface-enter {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes modal-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.986);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (max-width: 1260px) {
+  body.monitor-screen[data-theme="black-gold"] .summary,
+  body.monitor-screen[data-theme="black-gold"] .group-summary,
+  body.monitor-screen[data-theme="black-gold"] .account-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  body.monitor-screen[data-theme="black-gold"] .profit-strip {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 980px) {
+  body.monitor-screen[data-theme="black-gold"] .shell-monitor {
+    width: min(100vw - 20px, 1360px);
+  }
+
+  body.monitor-screen[data-theme="black-gold"] .hero,
+  body.monitor-screen[data-theme="black-gold"] .toolbar {
+    padding-left: 20px;
+    padding-right: 20px;
+  }
+
+  body.monitor-screen[data-theme="black-gold"] .toolbar {
+    align-items: flex-start;
+  }
+
+  body.monitor-screen[data-theme="black-gold"] .toolbar-meta {
+    justify-content: flex-start;
+  }
+
+  body.monitor-screen[data-theme="black-gold"] .summary,
+  body.monitor-screen[data-theme="black-gold"] .profit-strip,
+  body.monitor-screen[data-theme="black-gold"] .group-summary,
+  body.monitor-screen[data-theme="black-gold"] .account-grid,
+  body.monitor-screen[data-theme="black-gold"] .funding-main-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 768px) {
+  body.monitor-screen[data-theme="black-gold"] .hero {
+    padding: 20px 18px;
+  }
+
+  body.monitor-screen[data-theme="black-gold"] .hero-actions {
+    justify-content: flex-start;
+    margin-left: 0;
+  }
+
+  body.monitor-screen[data-theme="black-gold"] .toolbar {
+    padding: 14px 16px;
+  }
+
+  body.monitor-screen[data-theme="black-gold"] .summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  body.monitor-screen[data-theme="black-gold"] .profit-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  body.monitor-screen[data-theme="black-gold"] .profit-card + .profit-card::before {
+    top: 12px;
+    bottom: 12px;
+  }
+
+  body.monitor-screen[data-theme="black-gold"] #profitCards .linked-cell + .linked-cell::before {
+    top: 12px;
+    bottom: 12px;
+  }
+
+  body.monitor-screen[data-theme="black-gold"] .group-head,
+  body.monitor-screen[data-theme="black-gold"] .account-head,
+  body.monitor-screen[data-theme="black-gold"] .group-summary,
+  body.monitor-screen[data-theme="black-gold"] .account-grid,
+  body.monitor-screen[data-theme="black-gold"] .section,
+  body.monitor-screen[data-theme="black-gold"] .account-list,
+  body.monitor-screen[data-theme="black-gold"] .modal-head,
+  body.monitor-screen[data-theme="black-gold"] .modal-body,
+  body.monitor-screen[data-theme="black-gold"] .modal-foot {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  body.monitor-screen[data-theme="black-gold"] .account-switch-button {
+    flex: 1 1 calc(50% - 7px);
+    min-width: 0;
+  }
+
+  body.monitor-screen[data-theme="black-gold"] .modal-shell {
+    padding: 12px;
+  }
+
+  body.monitor-screen[data-theme="black-gold"] .modal-panel {
+    width: min(100vw - 12px, 1400px);
+  }
+
+  body.monitor-screen[data-theme="black-gold"] .funding-table {
+    display: table;
+    min-width: 920px;
+  }
+
+  body.monitor-screen[data-theme="black-gold"] table {
+    display: block;
+    overflow-x: auto;
+  }
+
+  body.monitor-screen[data-theme="black-gold"] .funding-log-entry {
+    grid-template-columns: 80px 74px;
+    align-items: start;
+  }
+
+  body.monitor-screen[data-theme="black-gold"] .funding-log-message {
+    grid-column: 1 / -1;
+  }
+
+  body.monitor-screen[data-theme="black-gold"] .funding-audit-body,
+  body.monitor-screen[data-theme="black-gold"] .funding-audit-detail-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  body.monitor-screen[data-theme="black-gold"] .summary,
+  body.monitor-screen[data-theme="black-gold"] .profit-strip,
+  body.monitor-screen[data-theme="black-gold"] .group-summary,
+  body.monitor-screen[data-theme="black-gold"] .account-grid,
+  body.monitor-screen[data-theme="black-gold"] .funding-main-grid {
+    grid-template-columns: 1fr;
+  }
+
+  body.monitor-screen[data-theme="black-gold"] #profitCards .linked-cell + .linked-cell::before {
+    left: 18px;
+    right: 18px;
+    top: 0;
+    bottom: auto;
+    width: auto;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(230, 198, 137, 0.16), transparent);
+  }
+
+  body.monitor-screen[data-theme="black-gold"] .group-actions,
+  body.monitor-screen[data-theme="black-gold"] .account-head-actions,
+  body.monitor-screen[data-theme="black-gold"] .toolbar-meta,
+  body.monitor-screen[data-theme="black-gold"] .toolbar-auth {
+    justify-content: flex-start;
+  }
+
+  body.monitor-screen[data-theme="black-gold"] .account-switch-button {
+    flex-basis: 100%;
+  }
+
+  body.monitor-screen[data-theme="black-gold"] .modal-actions {
+    grid-template-columns: 1fr;
+  }
+
+  body.monitor-screen[data-theme="black-gold"] .modal-actions-side,
+  body.monitor-screen[data-theme="black-gold"] .modal-actions-submit,
+  body.monitor-screen[data-theme="black-gold"] .modal-actions-center {
+    grid-column: auto;
+    justify-self: stretch;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body.monitor-screen[data-theme="black-gold"] *,
+  body.monitor-screen[data-theme="black-gold"] *::before,
+  body.monitor-screen[data-theme="black-gold"] *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}

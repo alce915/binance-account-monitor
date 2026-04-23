@@ -172,6 +172,7 @@ class RoutePolicy:
 ROUTE_POLICIES: tuple[RoutePolicy, ...] = (
     RoutePolicy(("/healthz",), frozenset({"GET"}), None, re.compile(r"^/healthz$")),
     RoutePolicy(("/login",), frozenset({"GET"}), None, re.compile(r"^/login$")),
+    RoutePolicy(("/static/login.css",), frozenset({"GET"}), None, re.compile(r"^/static/login\.css$")),
     RoutePolicy(("/api/auth/login",), frozenset({"POST"}), None, re.compile(r"^/api/auth/login$")),
     RoutePolicy(("/api/auth/logout",), frozenset({"POST"}), None, re.compile(r"^/api/auth/logout$")),
     RoutePolicy(("/api/auth/session",), frozenset({"GET"}), None, re.compile(r"^/api/auth/session$")),
