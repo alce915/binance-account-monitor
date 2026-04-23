@@ -1803,7 +1803,11 @@ body.monitor-screen[data-theme="black-gold"] .funding-table thead th {
 
 body.monitor-screen[data-theme="black-gold"] .funding-table thead th:last-child,
 body.monitor-screen[data-theme="black-gold"] .funding-table td:last-child {
-  padding-left: 24px;
+  padding-left: 74px;
+}
+
+body.monitor-screen[data-theme="black-gold"] .funding-table tbody td:first-child {
+  padding-left: 14px;
 }
 
 body.monitor-screen[data-theme="black-gold"] .funding-table td:last-child {
