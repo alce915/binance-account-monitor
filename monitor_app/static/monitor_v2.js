@@ -46,39 +46,77 @@ const streamUrl = accountIds
   ? `/stream/monitor?account_ids=${encodeURIComponent(accountIds)}`
   : '/stream/monitor';
 
+const uiMessages = window.MONITOR_V2_I18N?.messages || {};
+function messageByPath(path) {
+  return String(path || '').split('.').reduce((current, segment) => (
+    current && Object.prototype.hasOwnProperty.call(current, segment) ? current[segment] : undefined
+  ), uiMessages);
+}
+
+function applyTemplate(value, values = {}) {
+  return String(value ?? '').replace(/\{([a-zA-Z0-9_]+)\}/g, (match, key) => (
+    Object.prototype.hasOwnProperty.call(values, key) ? String(values[key]) : match
+  ));
+}
+
+function t(path, values = {}) {
+  const value = messageByPath(path);
+  return applyTemplate(typeof value === 'string' ? value : path, values);
+}
+
+function tArray(path) {
+  const value = messageByPath(path);
+  return Array.isArray(value) ? value : [];
+}
+
+function applyStaticI18n(root = document) {
+  root.querySelectorAll('[data-i18n]').forEach((element) => {
+    element.textContent = t(element.dataset.i18n);
+  });
+  root.querySelectorAll('[data-i18n-aria-label]').forEach((element) => {
+    element.setAttribute('aria-label', t(element.dataset.i18nAriaLabel));
+  });
+  const titleElement = root.querySelector('[data-i18n-title]');
+  if (titleElement) {
+    const title = t(titleElement.dataset.i18nTitle);
+    titleElement.textContent = title;
+    document.title = title;
+  }
+}
+
 const statusTextMap = {
-  ok: '正常',
-  partial: '部分异常',
-  error: '异常',
-  idle: '待连接',
-  reconnecting: '重连中',
-  disabled: '监控已关闭',
+  ok: t('status.ok'),
+  partial: t('status.partial'),
+  error: t('status.error'),
+  idle: t('status.idle'),
+  reconnecting: t('status.reconnecting'),
+  disabled: t('status.disabled'),
 };
 const messageTextMap = {
-  'Waiting for monitor connection': '正在等待监控连接',
-  'No accounts available': '当前没有可用账户',
-  'All accounts are healthy': '所有账户运行正常',
-  'All accounts failed': '所有账户均拉取失败',
-  'Some accounts failed': '部分账户拉取失败',
-  'Monitoring disabled': '监控已关闭，已暂停自动刷新',
-  'Monitor accounts reloaded': '监控账户配置已重载',
-  'Refresh completed': '刷新完成',
+  'Waiting for monitor connection': t('backendMessages.waitingConnection'),
+  'No accounts available': t('backendMessages.noAccounts'),
+  'All accounts are healthy': t('backendMessages.allHealthy'),
+  'All accounts failed': t('backendMessages.allFailed'),
+  'Some accounts failed': t('backendMessages.someFailed'),
+  'Monitoring disabled': t('backendMessages.monitoringDisabled'),
+  'Monitor accounts reloaded': t('backendMessages.accountsReloaded'),
+  'Refresh completed': t('backendMessages.refreshCompleted'),
 };
 const accountStatusTextMap = {
-  NORMAL: '正常',
-  ERROR: '异常',
-  ABNORMAL: '异常',
-  DISABLED: '停用',
+  NORMAL: t('accountStatus.normal'),
+  ERROR: t('accountStatus.error'),
+  ABNORMAL: t('accountStatus.abnormal'),
+  DISABLED: t('accountStatus.disabled'),
 };
-const positionSideTextMap = { LONG: '多', SHORT: '空', BOTH: '双向' };
+const positionSideTextMap = { LONG: t('positionSide.long'), SHORT: t('positionSide.short'), BOTH: t('positionSide.both') };
 const groupTextMap = {
-  expandAccounts: '展开子账号',
-  collapseAccounts: '收起子账号',
-  healthy: '正常',
-  warning: '警惕',
-  danger: '危险',
-  accounts: '个账户',
-  uniMmr: 'UniMMR',
+  expandAccounts: t('group.expandAccounts'),
+  collapseAccounts: t('group.collapseAccounts'),
+  healthy: t('group.healthy'),
+  warning: t('group.warning'),
+  danger: t('group.danger'),
+  accounts: t('group.accounts'),
+  uniMmr: t('group.uniMmr'),
 };
 
 const groupExpandedState = {};
@@ -128,6 +166,8 @@ let authSession = {
   csrf_token: '',
   last_activity_at: null,
 };
+
+applyStaticI18n();
 
 const fmt = (value) => {
   const number = Number(value ?? 0);
@@ -197,8 +237,16 @@ const maskUid = (value) => {
   if (text.length <= 6) return `${text.slice(0, 1)}${'*'.repeat(Math.max(text.length - 2, 1))}${text.slice(-1)}`;
   return `${text.slice(0, 4)}${'*'.repeat(Math.max(text.length - 6, 2))}${text.slice(-2)}`;
 };
+const maskMainUid = (value) => {
+  const text = String(value ?? '').trim();
+  if (!text) return '-';
+  if (text.includes('*')) return text;
+  if (text.length <= 2) return '*'.repeat(text.length);
+  if (text.length <= 5) return `${text.slice(0, 1)}${'*'.repeat(Math.max(text.length - 2, 1))}${text.slice(-1)}`;
+  return `${text.slice(0, 3)}${'*'.repeat(Math.max(text.length - 5, 3))}${text.slice(-2)}`;
+};
 
-const textStatus = (status) => statusTextMap[status] || status || '未知';
+const textStatus = (status) => statusTextMap[status] || status || t('status.unknown');
 const textMessage = (message) => messageTextMap[message] || message || '-';
 const textAccountStatus = (status) => accountStatusTextMap[status] || status || '-';
 const textPositionSide = (side) => positionSideTextMap[side] || side || '-';
@@ -250,8 +298,12 @@ const uniMmrToneKey = (value) => {
   return '';
 };
 const currentGroups = () => (Array.isArray(latestPayload?.groups) ? latestPayload.groups : []);
-const refreshButtonLabel = () => (refreshCooldownSeconds > 0 ? `${refreshCooldownSeconds}秒` : '立即刷新');
-const fundingRefreshButtonLabel = () => (fundingRefreshCooldownSeconds > 0 ? `${fundingRefreshCooldownSeconds}秒` : '立即刷新');
+const refreshButtonLabel = () => (refreshCooldownSeconds > 0
+  ? t('actions.refreshCountdown', { seconds: refreshCooldownSeconds })
+  : t('actions.refreshNow'));
+const fundingRefreshButtonLabel = () => (fundingRefreshCooldownSeconds > 0
+  ? t('actions.refreshCountdown', { seconds: fundingRefreshCooldownSeconds })
+  : t('actions.refreshNow'));
 const fmtClock = (value = new Date()) => {
   const date = value instanceof Date ? value : new Date(value);
   return Number.isNaN(date.getTime())
@@ -269,11 +321,11 @@ const shortOperationId = (value) => {
   return text ? text.slice(0, 8) : '-';
 };
 const authRoleText = (value, authSource) => {
-  if (authSource === 'whitelist') return '白名单管理员';
-  if (authSource === 'disabled') return '开放模式';
-  if (authSource === 'break_glass') return '应急管理员';
-  if (value === 'guest') return '游客模式';
-  return '管理员';
+  if (authSource === 'whitelist') return t('roles.whitelist');
+  if (authSource === 'disabled') return t('roles.disabled');
+  if (authSource === 'break_glass') return t('roles.breakGlass');
+  if (value === 'guest') return t('roles.guest');
+  return t('roles.admin');
 };
 const canWrite = () => {
   if (!authSession.enabled) return true;
@@ -332,7 +384,7 @@ async function loadAuthSession() {
   const payload = await response.json();
   if (response.status === 503 && payload?.error?.code === 'AUTH_NOT_INITIALIZED') {
     window.location.replace('/login');
-    throw new Error(payload?.error?.message || '认证未初始化');
+    throw new Error(payload?.error?.message || t('auth.notInitialized'));
   }
   if (!response.ok) {
     throw new Error(payload?.error?.message || `HTTP ${response.status}`);
@@ -350,7 +402,7 @@ async function loadAuthSession() {
   if (authSession.enabled && !authSession.authenticated) {
     const next = `${window.location.pathname}${window.location.search || ''}`;
     window.location.replace(`/login?next=${encodeURIComponent(next)}`);
-    throw new Error('认证已失效');
+    throw new Error(t('auth.expired'));
   }
   syncAuthUi();
   return authSession;
@@ -371,7 +423,7 @@ function applyActionButtonState() {
   refreshButton.textContent = refreshButtonLabel();
   refreshButton.disabled = !writeAllowed || importBusy || refreshBusy || toggleBusy || refreshCooldownSeconds > 0;
   downloadTemplateButton.disabled = !writeAllowed || importBusy || refreshBusy || toggleBusy;
-  importButton.textContent = importBusy ? '导入中' : '导入 Excel';
+  importButton.textContent = importBusy ? t('actions.importing') : t('actions.importExcel');
   importButton.disabled = !writeAllowed || importBusy || refreshBusy || toggleBusy;
   fundingTransferButton.disabled = !writeAllowed || importBusy || refreshBusy || toggleBusy || currentGroups().length === 0;
   monitorToggle.disabled = !writeAllowed || toggleBusy || refreshBusy || importBusy;
@@ -442,9 +494,9 @@ function renderToolbarStats(summary = {}) {
   toolbarStatsSignature = signature;
 
   const stats = [
-    { label: '总账户数', value: fmtCount(summary.account_count), tone: '' },
-    { label: '正常账户', value: fmtCount(summary.success_count), tone: 'value-positive' },
-    { label: '异常账户', value: fmtCount(summary.error_count), tone: 'value-negative' },
+    { label: t('toolbar.totalAccounts'), value: fmtCount(summary.account_count), tone: '' },
+    { label: t('toolbar.healthyAccounts'), value: fmtCount(summary.success_count), tone: 'value-positive' },
+    { label: t('toolbar.abnormalAccounts'), value: fmtCount(summary.error_count), tone: 'value-negative' },
   ];
   toolbarStats.innerHTML = stats.map(({ label, value, tone }) => `
     <div class="stat-pill toolbar-stat-pill toolbar-stat-pill-refined toolbar-stat-pill-clipped">
@@ -468,12 +520,12 @@ function renderSummary(summary = {}) {
   summarySignature = signature;
 
   const cards = [
-    { label: '权益', value: fmtCurrency(summary.equity), tone: '' },
-    { label: '保证金', value: fmtCurrency(summary.margin), tone: '' },
-    { label: '可用余额', value: fmtCurrency(summary.available_balance), tone: '' },
-    { label: '未实现盈亏', value: fmtCurrency(summary.unrealized_pnl), tone: numberTone(summary.unrealized_pnl) },
-    { label: '手续费', value: fmtCurrency(summary.total_commission), tone: numberTone(summary.total_commission) },
-    { label: '7日年化', value: fmtPercent(summary.distribution_apy_7d), tone: numberTone(summary.distribution_apy_7d) },
+    { label: t('summary.equity'), value: fmtCurrency(summary.equity), tone: '' },
+    { label: t('summary.margin'), value: fmtCurrency(summary.margin), tone: '' },
+    { label: t('summary.availableBalance'), value: fmtCurrency(summary.available_balance), tone: '' },
+    { label: t('summary.unrealizedPnl'), value: fmtCurrency(summary.unrealized_pnl), tone: numberTone(summary.unrealized_pnl) },
+    { label: t('summary.commission'), value: fmtCurrency(summary.total_commission), tone: numberTone(summary.total_commission) },
+    { label: t('summary.apy7d'), value: fmtPercent(summary.distribution_apy_7d), tone: numberTone(summary.distribution_apy_7d) },
   ];
   summaryCards.innerHTML = cards.map(({ label, value, tone }) => `
     <article class="card summary-card summary-card-refined summary-card-proportional metric">
@@ -498,7 +550,7 @@ function renderProfitSummary(profitSummary = {}) {
 
   profitCards.innerHTML = periods.map((period) => {
     const tone = numberTone(period.amount);
-    const note = period.complete ? '' : '<div class="card-note profit-card-note">历史回补中</div>';
+    const note = period.complete ? '' : `<div class="card-note profit-card-note">${escapeHtml(t('profit.historyBackfill'))}</div>`;
     return `
       <article class="profit-card linked-cell${period.complete ? '' : ' is-incomplete'}">
         <div class="label profit-card-label linked-label linked-label-emphasis">${escapeHtml(period.label || '-')}</div>
@@ -509,7 +561,7 @@ function renderProfitSummary(profitSummary = {}) {
   }).join('');
 }
 
-function renderRows(headers, rows, formatter, emptyLabel = '暂无数据') {
+function renderRows(headers, rows, formatter, emptyLabel = t('empty.data')) {
   if (!Array.isArray(rows) || rows.length === 0) {
     return `<div class="empty">${escapeHtml(emptyLabel)}</div>`;
   }
@@ -550,9 +602,9 @@ function resetFundingSyncAmountState() {
 }
 
 function fundingLogLevelLabel(level) {
-  if (level === 'success') return 'SUCCESS';
-  if (level === 'error') return 'ERROR';
-  return 'INFO';
+  if (level === 'success') return t('funding.logs.success');
+  if (level === 'error') return t('funding.logs.error');
+  return t('funding.logs.info');
 }
 
 function fundingToneToLogLevel(tone = '') {
@@ -563,9 +615,11 @@ function fundingToneToLogLevel(tone = '') {
 
 function fundingOperationMetaText() {
   if (fundingOverview && fundingOverview.write_enabled === false) {
-    return `写保护：${fundingOverview?.write_disabled_reason || '当前环境禁止真实划转'}`;
+    return t('funding.writeProtection', {
+      reason: fundingOverview?.write_disabled_reason || t('funding.writeDisabledReason'),
+    });
   }
-  return `操作ID：${shortOperationId(fundingCurrentOperationId())}`;
+  return t('funding.operationId', { id: shortOperationId(fundingCurrentOperationId()) });
 }
 
 function fundingOperationMetaFullText() {
@@ -652,7 +706,7 @@ function ensureFundingAuditSelection() {
 
 function formatFundingAuditDetail(detail) {
   if (!detail) {
-    return '<div class="funding-log-empty">请选择一条审计记录</div>';
+    return `<div class="funding-log-empty">${escapeHtml(t('funding.audit.chooseRecord'))}</div>`;
   }
   const summary = detail.operation_summary || {};
   const reconciliation = detail.reconciliation || {};
@@ -670,19 +724,22 @@ function formatFundingAuditDetail(detail) {
           </div>
           <div class="funding-audit-result-meta mono">
             <div>${escapeHtml(result.account_id || '-')} | UID ${escapeHtml(maskUid(result.uid || '-'))}</div>
-            <div>请求 ${escapeHtml(result.requested_amount || '-')} / 执行 ${escapeHtml(result.executed_amount || '-')}</div>
-            <div>预校验可用 ${escapeHtml(result.precheck_available_amount || '-')}</div>
+            <div>${escapeHtml(t('funding.audit.requestedAndExecuted', {
+              requested: result.requested_amount || '-',
+              executed: result.executed_amount || '-',
+            }))}</div>
+            <div>${escapeHtml(t('funding.audit.precheckAvailable', { amount: result.precheck_available_amount || '-' }))}</div>
           </div>
           <div>${escapeHtml(result.message || '-')}</div>
         </div>
       `).join('')
-    : '<div class="funding-log-empty">暂无可展示的执行明细</div>';
+    : `<div class="funding-log-empty">${escapeHtml(t('funding.audit.noDetails'))}</div>`;
 
   return `
     <div class="funding-audit-detail-head">
       <div class="funding-audit-detail-title">
-        <strong>${escapeHtml(detail.direction === 'collect' ? '子账号归集' : '主账号分发')}</strong>
-        <div class="mono">操作ID ${escapeHtml(shortOperationId(detail.operation_id || '-'))}</div>
+        <strong>${escapeHtml(detail.direction === 'collect' ? t('funding.audit.collect') : t('funding.audit.distribute'))}</strong>
+        <div class="mono">${escapeHtml(t('funding.audit.operationId', { id: shortOperationId(detail.operation_id || '-') }))}</div>
       </div>
       <div class="funding-log-badge is-${escapeHtml(fundingAuditStatusLevel(detail.operation_status || ''))}">
         ${escapeHtml(fundingAuditStatusLabel(detail.operation_status || ''))}
@@ -690,38 +747,48 @@ function formatFundingAuditDetail(detail) {
     </div>
     <div class="funding-audit-detail-grid">
       <div class="funding-audit-detail-card">
-        <span>资产</span>
+        <span>${escapeHtml(t('funding.audit.asset'))}</span>
         <strong>${escapeHtml(summary.asset || detail.asset || '-')}</strong>
       </div>
       <div class="funding-audit-detail-card">
-        <span>执行阶段</span>
+        <span>${escapeHtml(t('funding.audit.stage'))}</span>
         <strong>${escapeHtml(detail.execution_stage || '-')}</strong>
       </div>
       <div class="funding-audit-detail-card">
-        <span>请求总额</span>
+        <span>${escapeHtml(t('funding.audit.requestedTotal'))}</span>
         <strong>${escapeHtml(summary.requested_total_amount || precheck.requested_total_amount || '0')}</strong>
       </div>
       <div class="funding-audit-detail-card">
-        <span>到账确认</span>
+        <span>${escapeHtml(t('funding.audit.reconciliation'))}</span>
         <strong>${escapeHtml(reconciliation.status || '-')}</strong>
       </div>
     </div>
     <div class="funding-audit-section">
-      <h4>摘要</h4>
+      <h4>${escapeHtml(t('funding.audit.summary'))}</h4>
       <div class="funding-audit-result">
         <div class="funding-audit-result-meta">
-          <div>预校验账号 ${escapeHtml(String(precheck.validated_account_count ?? 0))} 个</div>
-          <div>尝试 ${escapeHtml(String(summary.attempted_count ?? 0))} / 成功 ${escapeHtml(String(summary.success_count ?? 0))} / 失败 ${escapeHtml(String(summary.failure_count ?? 0))}</div>
-          <div>确认 ${escapeHtml(String(summary.confirmed_count ?? 0))} / 待确认 ${escapeHtml(String(summary.pending_confirmation_count ?? 0))}</div>
-          <div>主账号变动方向 ${escapeHtml(summary.expected_main_direction || '-')}</div>
-          <div>主账号前后可用 ${escapeHtml(summary.main_before_available_amount || '-')} -> ${escapeHtml(summary.main_after_available_amount || '-')}</div>
+          <div>${escapeHtml(t('funding.audit.precheckAccounts', { count: String(precheck.validated_account_count ?? 0) }))}</div>
+          <div>${escapeHtml(t('funding.audit.attempts', {
+            attempted: String(summary.attempted_count ?? 0),
+            success: String(summary.success_count ?? 0),
+            failure: String(summary.failure_count ?? 0),
+          }))}</div>
+          <div>${escapeHtml(t('funding.audit.confirmations', {
+            confirmed: String(summary.confirmed_count ?? 0),
+            pending: String(summary.pending_confirmation_count ?? 0),
+          }))}</div>
+          <div>${escapeHtml(t('funding.audit.mainDirection', { direction: summary.expected_main_direction || '-' }))}</div>
+          <div>${escapeHtml(t('funding.audit.mainBeforeAfter', {
+            before: summary.main_before_available_amount || '-',
+            after: summary.main_after_available_amount || '-',
+          }))}</div>
         </div>
-        <div>${escapeHtml(detail.message || '操作已记录')}</div>
-        ${unconfirmed.length ? `<div class="mono">待确认账号：${escapeHtml(unconfirmed.join(', '))}</div>` : ''}
+        <div>${escapeHtml(detail.message || t('funding.audit.recorded'))}</div>
+        ${unconfirmed.length ? `<div class="mono">${escapeHtml(t('funding.audit.unconfirmedAccounts', { accounts: unconfirmed.join(', ') }))}</div>` : ''}
       </div>
     </div>
     <div class="funding-audit-section">
-      <h4>执行明细</h4>
+      <h4>${escapeHtml(t('funding.audit.details'))}</h4>
       <div class="funding-audit-section-list">${resultMarkup}</div>
     </div>
   `;
@@ -753,9 +820,9 @@ function renderFundingAuditPanel() {
                 <span>${escapeHtml(entry.asset || '-')}</span>
                 <span class="mono">${escapeHtml(entry.execution_stage || '-')}</span>
               </div>
-              <div class="funding-audit-item-message">${escapeHtml(entry.message || '操作已记录')}</div>
+              <div class="funding-audit-item-message">${escapeHtml(entry.message || t('funding.audit.recorded'))}</div>
             </button>
-          `).join('') : '<div class="funding-log-empty">暂无审计记录</div>'}
+          `).join('') : `<div class="funding-log-empty">${escapeHtml(t('funding.audit.noRecords'))}</div>`}
         </div>
         <div class="funding-audit-detail">${formatFundingAuditDetail(selectedDetail)}</div>
       </div>
@@ -779,7 +846,7 @@ function renderFundingLogPanel() {
   const entries = fundingLogEntries;
   if (!entries.length) {
     fundingLogLatestTime.textContent = '--:--:--';
-    fundingLogList.innerHTML = '<div class="funding-log-empty">暂无日志</div>';
+    fundingLogList.innerHTML = `<div class="funding-log-empty">${escapeHtml(t('funding.logs.empty'))}</div>`;
     return;
   }
 
@@ -862,7 +929,7 @@ async function loadFundingAuditDetail(mainAccountId, operationId, direction = ''
   const normalizedDirection = String(direction || '').trim().toLowerCase();
   const entryKey = fundingAuditEntryKey(normalizedDirection, normalizedOperationId);
   if (!mainAccountId || !normalizedOperationId || !normalizedDirection) {
-    return { success: false, error: '暂无可加载的审计详情' };
+    return { success: false, error: t('funding.audit.noDetailToLoad') };
   }
   try {
     const query = new URLSearchParams({ direction: normalizedDirection }).toString();
@@ -881,7 +948,7 @@ async function loadFundingAuditDetail(mainAccountId, operationId, direction = ''
       delete fundingAuditDetailsByOperationId[entryKey];
       renderFundingLogPanel();
     }
-    appendFundingLog(`审计详情加载失败：${error}`, 'error');
+    appendFundingLog(t('funding.audit.loadDetailFailed', { error }), 'error');
     return { success: false, error: String(error) };
   }
 }
@@ -892,7 +959,7 @@ async function loadFundingAudit(mainAccountId, { preserveOnError = true } = {}) 
     fundingAuditDetailsByOperationId = {};
     fundingAuditSelectedOperationId = '';
     renderFundingLogPanel();
-    return { success: false, error: '暂无分组' };
+    return { success: false, error: t('funding.noGroups') };
   }
 
   fundingAuditBusy = true;
@@ -913,7 +980,7 @@ async function loadFundingAudit(mainAccountId, { preserveOnError = true } = {}) 
     if (!preserveOnError) {
       setFundingAuditEntries([]);
     }
-    appendFundingLog(`审计日志加载失败：${error}`, 'error');
+    appendFundingLog(t('funding.audit.loadListFailed', { error }), 'error');
     return { success: false, error: String(error) };
   } finally {
     fundingAuditBusy = false;
@@ -926,7 +993,7 @@ async function ensureFundingAuditDetailLoaded(mainAccountId, { preserveOnError =
   if (!selectedEntry) {
     renderFundingLogPanel();
     renderFundingOperationMeta();
-    return { success: false, error: '暂无审计记录' };
+    return { success: false, error: t('funding.audit.noRecords') };
   }
   const entryKey = fundingAuditEntryKey(selectedEntry);
   if (getFundingAuditDetail(entryKey)) {
@@ -974,9 +1041,9 @@ function fundingRowEligible(row) {
 
 function fundingRowReason(row) {
   if (fundingDirection === 'distribute') {
-    return row?.reason_distribute || row?.reason || '不可用';
+    return row?.reason_distribute || row?.reason || t('funding.unavailable');
   }
-  return row?.reason_collect || row?.reason || '不可用';
+  return row?.reason_collect || row?.reason || t('funding.unavailable');
 }
 
 function fundingModeAvailable() {
@@ -1078,7 +1145,7 @@ function applyFundingQuickCollectPreset() {
       state.checked = false;
     }
   });
-  appendFundingLog(`已为当前分组可操作子账号填入 ${fundingSelectedAsset} 的最大归集金额。`, 'info');
+  appendFundingLog(t('funding.quickCollectFilled', { asset: fundingSelectedAsset }), 'info');
   renderFundingRows();
   applyActionButtonState();
 }
@@ -1099,7 +1166,7 @@ function applyFundingQuickClearPreset() {
     state.amount = '';
   });
   resetFundingSyncAmountState();
-  appendFundingLog('已清空当前归集表单。', 'info');
+  appendFundingLog(t('funding.quickClearDone'), 'info');
   renderFundingRows();
   applyActionButtonState();
 }
@@ -1108,8 +1175,8 @@ function fundingCapabilityState() {
   const modeAvailable = fundingModeAvailable();
   return {
     message: modeAvailable
-      ? (fundingDirection === 'distribute' ? '当前分组可执行主账号现货分发。' : '当前分组可执行子账号现货归集。')
-      : fundingOverview?.reason || (fundingDirection === 'distribute' ? '当前分组暂无可用现货分发子账号' : '当前分组暂无可用现货归集子账号'),
+      ? (fundingDirection === 'distribute' ? t('funding.distributeAvailable') : t('funding.collectAvailable'))
+      : fundingOverview?.reason || (fundingDirection === 'distribute' ? t('funding.distributeUnavailable') : t('funding.collectUnavailable')),
     tone: modeAvailable ? 'is-success' : 'is-error',
   };
 }
@@ -1137,16 +1204,16 @@ function renderFundingMainSummary() {
         <div class="funding-identity-head">
           <div class="funding-identity-content">
             <div class="funding-identity-title">${escapeHtml(fundingOverview?.main_account_name || fundingSelectedGroupId || '-')}</div>
-            <div class="funding-identity-meta mono">${escapeHtml(maskUid(mainAccount.uid || '-'))}</div>
+            <div class="funding-identity-meta mono">${escapeHtml(maskMainUid(mainAccount.uid || '-'))}</div>
           </div>
           <div class="badge funding-identity-badge ${mainAccount.transfer_ready ? 'status-ok' : 'status-error'}">
-            ${escapeHtml(mainAccount.transfer_ready ? '可操作' : '不可用')}
+            ${escapeHtml(mainAccount.transfer_ready ? t('funding.ready') : t('funding.unavailable'))}
           </div>
         </div>
       </div>
-      <div class="funding-stat"><div class="label funding-stat-label">当前代币</div><div class="value funding-stat-value">${escapeHtml(fundingSelectedAsset || '-')}</div></div>
-      <div class="funding-stat"><div class="label funding-stat-label">主账号现货可用</div><div class="value funding-stat-value">${fmt(fundingAssetValue(mainAccount))}</div></div>
-      <div class="funding-stat"><div class="label funding-stat-label">归集 API 状态</div><div class="value funding-stat-value">${escapeHtml(mainAccount.transfer_ready ? '已配置' : mainAccount.reason || '未配置')}</div></div>
+      <div class="funding-stat"><div class="label funding-stat-label">${escapeHtml(t('funding.currentToken'))}</div><div class="value funding-stat-value">${escapeHtml(fundingSelectedAsset || '-')}</div></div>
+      <div class="funding-stat"><div class="label funding-stat-label">${escapeHtml(t('funding.mainSpotAvailable'))}</div><div class="value funding-stat-value">${fmt(fundingAssetValue(mainAccount))}</div></div>
+      <div class="funding-stat"><div class="label funding-stat-label">${escapeHtml(t('funding.collectApiStatus'))}</div><div class="value funding-stat-value">${escapeHtml(mainAccount.transfer_ready ? t('funding.configured') : mainAccount.reason || t('funding.unconfigured'))}</div></div>
     </div>
   `;
 }
@@ -1204,14 +1271,14 @@ function renderFundingRows() {
         <td>${fmt(fundingAssetValue(row))}</td>
         <td>
           <div class="funding-amount-wrap">
-            <input class="funding-amount-input" type="number" min="0" step="0.00000001" placeholder="${distributeMode ? '输入金额' : '输入归集金额'}" data-funding-amount-id="${escapeHtml(accountId)}" value="${escapeHtml(state.amount || '')}" ${amountDisabled ? 'disabled' : ''}>
-            <button class="funding-max-button" type="button" data-funding-max-id="${escapeHtml(accountId)}" ${maxDisabled ? 'disabled' : ''}>最大</button>
+            <input class="funding-amount-input" type="number" min="0" step="0.00000001" placeholder="${escapeHtml(distributeMode ? t('funding.inputAmount') : t('funding.inputCollectAmount'))}" data-funding-amount-id="${escapeHtml(accountId)}" value="${escapeHtml(state.amount || '')}" ${amountDisabled ? 'disabled' : ''}>
+            <button class="funding-max-button" type="button" data-funding-max-id="${escapeHtml(accountId)}" ${maxDisabled ? 'disabled' : ''}>${escapeHtml(t('funding.max'))}</button>
           </div>
         </td>
-        <td class="${eligible ? 'value-positive' : ''}">${escapeHtml(eligible ? '可操作' : reason)}</td>
+        <td class="${eligible ? 'value-positive' : ''}">${escapeHtml(eligible ? t('funding.ready') : reason)}</td>
       </tr>
     `;
-  }).join('')}` : '<tr><td colspan="6" class="empty">当前分组暂无可操作子账号</td></tr>';
+  }).join('')}` : `<tr><td colspan="6" class="empty">${escapeHtml(t('funding.noOperableChildren'))}</td></tr>`;
   syncFundingAmountToggleState();
   syncFundingSelectAllState();
   syncFundingListBodyHeight();
@@ -1220,10 +1287,10 @@ function renderFundingRows() {
 function renderFundingModal() {
   const groups = fundingGroupOptions();
   if (!groups.length) {
-    fundingGroupSelect.innerHTML = '<option value="">暂无分组</option>';
-    fundingAssetSelect.innerHTML = '<option value="">暂无代币</option>';
+    fundingGroupSelect.innerHTML = `<option value="">${escapeHtml(t('funding.noGroups'))}</option>`;
+    fundingAssetSelect.innerHTML = `<option value="">${escapeHtml(t('funding.noTokens'))}</option>`;
     fundingMainSummary.innerHTML = '';
-    fundingRows.innerHTML = '<tr><td colspan="6" class="empty">当前暂无可用分组</td></tr>';
+    fundingRows.innerHTML = `<tr><td colspan="6" class="empty">${escapeHtml(t('funding.noAvailableGroups'))}</td></tr>`;
     if (fundingQuickActions) {
       fundingQuickActions.hidden = true;
     }
@@ -1235,7 +1302,7 @@ function renderFundingModal() {
     }
     syncFundingAmountToggleState();
     syncFundingSelectAllState();
-    fundingSubmitButton.textContent = fundingDirection === 'distribute' ? '执行分发' : '执行归集';
+    fundingSubmitButton.textContent = fundingDirection === 'distribute' ? t('funding.executeDistribute') : t('funding.executeCollect');
     fundingSubmitButton.disabled = true;
     renderFundingOperationMeta();
     renderFundingLogPanel();
@@ -1256,7 +1323,7 @@ function renderFundingModal() {
   }
   fundingAssetSelect.innerHTML = assets.length
     ? assets.map((asset) => `<option value="${escapeHtml(asset)}" ${asset === fundingSelectedAsset ? 'selected' : ''}>${escapeHtml(asset)}</option>`).join('')
-    : '<option value="">暂无可用代币</option>';
+    : `<option value="">${escapeHtml(t('funding.noAvailableTokens'))}</option>`;
 
   fundingModeDistribute.classList.toggle('is-active', fundingDirection === 'distribute');
   fundingModeCollect.classList.toggle('is-active', fundingDirection === 'collect');
@@ -1274,7 +1341,7 @@ function renderFundingModal() {
   if (fundingQuickClearButton) {
     fundingQuickClearButton.disabled = fundingModalBusy || fundingDirection !== 'collect';
   }
-  fundingSubmitButton.textContent = fundingDirection === 'distribute' ? '执行分发' : '执行归集';
+  fundingSubmitButton.textContent = fundingDirection === 'distribute' ? t('funding.executeDistribute') : t('funding.executeCollect');
   fundingSubmitButton.disabled = fundingModalBusy || !modeAvailable || !fundingSelectedAsset || !writeEnabled;
   renderFundingOperationMeta();
   renderFundingLogPanel();
@@ -1284,7 +1351,7 @@ async function loadFundingOverview(mainAccountId, { resetState = false, preserve
   if (!mainAccountId) {
     fundingOverview = null;
     renderFundingModal();
-    return { success: false, error: '暂无分组' };
+    return { success: false, error: t('funding.noGroups') };
   }
 
   const previousOverview = fundingOverview;
@@ -1333,7 +1400,7 @@ async function loadFundingOverview(mainAccountId, { resetState = false, preserve
 function openFundingModal() {
   const groups = fundingGroupOptions();
   if (!groups.length) {
-    messageText.textContent = '当前没有可用分组，无法打开现货资金划转面板';
+    messageText.textContent = t('funding.openUnavailable');
     return;
   }
   fundingSelectedGroupId = fundingSelectedGroupId || groups[0].id;
@@ -1343,7 +1410,7 @@ function openFundingModal() {
   resetFundingSyncAmountState();
   fundingModalShell.classList.remove('hidden');
   document.body.style.overflow = 'hidden';
-  appendFundingLog('已打开资金归集与分发面板。', 'info');
+  appendFundingLog(t('funding.opened'), 'info');
   loadFundingOverview(fundingSelectedGroupId, { resetState: true });
 }
 
@@ -1364,24 +1431,24 @@ async function refreshMonitorAfterFundingOperation() {
     render(payload);
     return { success: true, error: '' };
   } catch (error) {
-    messageText.textContent = `资金操作后刷新监控失败：${error}`;
+    messageText.textContent = t('funding.afterOperationRefreshFailed', { error });
     return { success: false, error: String(error) };
   }
 }
 
 async function refreshFundingOverviewNow({ useCooldown = false, allowWhileBusy = false } = {}) {
   if (!fundingSelectedGroupId) {
-    return { success: false, error: '暂无可刷新的分组' };
+    return { success: false, error: t('refresh.noRefreshableGroups') };
   }
   if (fundingRefreshBusy || (!allowWhileBusy && fundingModalBusy) || (useCooldown && fundingRefreshCooldownSeconds > 0)) {
-    return { success: false, error: '当前刷新不可用' };
+    return { success: false, error: t('refresh.unavailable') };
   }
 
   fundingRefreshBusy = true;
   if (useCooldown) {
     startFundingRefreshCooldown(10);
   }
-  appendFundingLog('正在刷新当前分组资金信息…', 'info');
+  appendFundingLog(t('funding.refreshingOverview'), 'info');
   renderFundingModal();
   applyActionButtonState();
 
@@ -1394,9 +1461,9 @@ async function refreshFundingOverviewNow({ useCooldown = false, allowWhileBusy =
   applyActionButtonState();
 
   if (result.success) {
-    appendFundingLog('当前分组资金信息刷新成功。', 'success');
+    appendFundingLog(t('funding.overviewRefreshSuccess'), 'success');
   } else {
-    appendFundingLog(`资金信息刷新失败：${result.error}`, 'error');
+    appendFundingLog(t('funding.overviewRefreshFailed', { error: result.error }), 'error');
   }
   renderFundingModal();
 
@@ -1413,7 +1480,7 @@ function parseFundingFailurePayload(payload = {}, response = null, fallbackOpera
   ).trim();
   return {
     operationId,
-    detail: String(payload?.detail || payload?.error?.message || '资金操作失败'),
+    detail: String(payload?.detail || payload?.error?.message || t('funding.operationFailed')),
     code: String(payload?.error?.code || 'PRECHECK_UNAVAILABLE'),
   };
 }
@@ -1421,7 +1488,7 @@ function parseFundingFailurePayload(payload = {}, response = null, fallbackOpera
 async function copyFundingOperationId() {
   const operationId = fundingOperationMetaFullText();
   if (!operationId) {
-    appendFundingLog('当前没有可复制的操作ID。', 'error');
+    appendFundingLog(t('funding.noOperationId'), 'error');
     return;
   }
   try {
@@ -1441,12 +1508,12 @@ async function copyFundingOperationId() {
       const copied = typeof document.execCommand === 'function' && document.execCommand('copy');
       textArea.remove();
       if (!copied) {
-        throw new Error(`clipboard unavailable，请手动复制：${operationId}`);
+        throw new Error(t('funding.clipboardUnavailable', { operationId }));
       }
     }
-    appendFundingLog(`已复制操作ID：${shortOperationId(operationId)}`, 'success');
+    appendFundingLog(t('funding.copiedOperationId', { id: shortOperationId(operationId) }), 'success');
   } catch (error) {
-    appendFundingLog(`复制操作ID失败：${error}`, 'error');
+    appendFundingLog(t('funding.copyOperationIdFailed', { error }), 'error');
   }
 }
 
@@ -1462,28 +1529,28 @@ async function submitFundingOperation() {
     .map(([accountId, state]) => ({ account_id: accountId, amount: state.amount || '' }));
 
   if (fundingDirection === 'distribute' && !selectedRows.some((row) => Number(row.amount) > 0)) {
-    appendFundingLog('请至少勾选一个子账号并填写大于 0 的分发金额。', 'error');
+    appendFundingLog(t('funding.distributeSelectionRequired'), 'error');
     return;
   }
   if (fundingDirection === 'collect' && !selectedRows.some((row) => Number(row.amount) > 0)) {
-    appendFundingLog('请至少勾选一个子账号并填写大于 0 的归集金额。', 'error');
+    appendFundingLog(t('funding.collectSelectionRequired'), 'error');
     return;
   }
   if (fundingOverview.write_enabled === false) {
-    appendFundingLog(fundingOverview.write_disabled_reason || '当前环境禁止真实划转。', 'error');
+    appendFundingLog(fundingOverview.write_disabled_reason || t('funding.writeDisabledReason'), 'error');
     return;
   }
   for (const row of selectedRows) {
     const amount = Number(row.amount);
     if (!Number.isFinite(amount) || amount < 0) {
-      appendFundingLog('请输入合法的金额。', 'error');
+      appendFundingLog(t('funding.invalidAmount'), 'error');
       return;
     }
     if (fundingDirection === 'collect') {
       const overviewRow = rowById.get(String(row.account_id || ''));
       const maxAmount = overviewRow ? fundingAssetNumber(overviewRow) : 0;
       if (amount > maxAmount + 1e-12) {
-        appendFundingLog('请输入不大于最大可归集金额的数值。', 'error');
+        appendFundingLog(t('funding.exceedsCollectable'), 'error');
         return;
       }
     }
@@ -1495,7 +1562,7 @@ async function submitFundingOperation() {
   applyActionButtonState();
   renderFundingOperationMeta();
   appendFundingLog(
-    `${fundingDirection === 'distribute' ? '正在执行现货分发' : '正在执行现货归集'}… 操作ID ${shortOperationId(operationId)}`,
+    `${fundingDirection === 'distribute' ? t('funding.executingDistribute') : t('funding.executingCollect')}… ${t('funding.audit.operationId', { id: shortOperationId(operationId) })}`,
     'info',
   );
   try {
@@ -1515,7 +1582,7 @@ async function submitFundingOperation() {
     if (!response.ok) {
       const failure = parseFundingFailurePayload(payload, response, operationId);
       fundingPendingOperationId = failure.operationId || operationId;
-      throw new Error(`${failure.code}：${failure.detail}`);
+      throw new Error(`${failure.code}: ${failure.detail}`);
     }
 
     fundingPendingOperationId = String(response.headers.get('X-Funding-Operation-Id') || payload.operation_id || operationId);
@@ -1523,33 +1590,36 @@ async function submitFundingOperation() {
     resetFundingSelectionState();
     renderFundingModal();
     if (payload.idempotent_hit) {
-      appendFundingLog(`命中幂等返回：${shortOperationId(fundingPendingOperationId)}，当前仍按既有结果展示。`, 'info');
+      appendFundingLog(t('funding.idempotentHit', { id: shortOperationId(fundingPendingOperationId) }), 'info');
     }
     const allSucceeded = Array.isArray(payload.results) && payload.results.every((row) => row.success);
-    const baseMessage = payload.message || '操作完成';
-    appendFundingLog(`${baseMessage} | 操作ID ${shortOperationId(fundingPendingOperationId)}`, allSucceeded ? 'success' : 'error');
+    const baseMessage = payload.message || t('funding.completed');
+    appendFundingLog(`${baseMessage} | ${t('funding.audit.operationId', { id: shortOperationId(fundingPendingOperationId) })}`, allSucceeded ? 'success' : 'error');
     if (payload.overview_refresh?.success === false) {
-      appendFundingLog(`资金概览刷新未确认：${payload.overview_refresh.message || '请稍后手动刷新'} | 操作ID ${shortOperationId(fundingPendingOperationId)}`, 'error');
+      appendFundingLog(t('funding.overviewRefreshUnconfirmed', {
+        message: payload.overview_refresh.message || t('funding.retryLater'),
+        id: shortOperationId(fundingPendingOperationId),
+      }), 'error');
     }
     if (payload.reconciliation?.status) {
       const reconciliationLabel = payload.reconciliation.status === 'confirmed'
-        ? '到账确认成功'
+        ? t('funding.reconciliationConfirmed')
         : payload.reconciliation.status === 'partially_confirmed'
-          ? '到账确认部分成功'
-          : '到账确认未完成';
-      appendFundingLog(`${reconciliationLabel}，操作ID ${shortOperationId(fundingPendingOperationId)}`, payload.reconciliation.status === 'confirmed' ? 'success' : 'info');
+          ? t('funding.reconciliationPartiallyConfirmed')
+          : t('funding.reconciliationPending');
+      appendFundingLog(`${reconciliationLabel}，${t('funding.audit.operationId', { id: shortOperationId(fundingPendingOperationId) })}`, payload.reconciliation.status === 'confirmed' ? 'success' : 'info');
     }
     await loadFundingAudit(fundingSelectedGroupId, { preserveOnError: true });
 
     const monitorRefreshResult = await refreshMonitorAfterFundingOperation();
     appendFundingLog(
       monitorRefreshResult.success
-        ? `主界面监控信息刷新成功。操作ID ${shortOperationId(fundingPendingOperationId)}`
-        : `主界面监控信息刷新失败：${monitorRefreshResult.error} | 操作ID ${shortOperationId(fundingPendingOperationId)}`,
+        ? t('funding.monitorRefreshSuccess', { id: shortOperationId(fundingPendingOperationId) })
+        : t('funding.monitorRefreshFailed', { error: monitorRefreshResult.error, id: shortOperationId(fundingPendingOperationId) }),
       monitorRefreshResult.success ? 'success' : 'error',
     );
   } catch (error) {
-    appendFundingLog(`资金操作失败：${error} | 操作ID ${shortOperationId(fundingPendingOperationId || operationId)}`, 'error');
+    appendFundingLog(`${t('funding.operationFailed')}：${error} | ${t('funding.audit.operationId', { id: shortOperationId(fundingPendingOperationId || operationId) })}`, 'error');
   } finally {
     fundingModalBusy = false;
     applyActionButtonState();
@@ -1662,23 +1732,22 @@ function renderAccount(account) {
         </div>
         <div class="account-head-actions">
           ${renderUniMmrIndicator(account)}
-          <div class="badge badge-status-reference status-pill-reference status-pill-scaled status-pill-scale-130 account-header-pill ${statusClass(account.status)}">${escapeHtml(textStatus(account.status))}</div>
         </div>
       </div>
       <div class="account-grid">
         ${[
-          { label: '权益', value: fmtCurrency(totals.equity), tone: '' },
-          { label: '保证金', value: fmtCurrency(totals.margin), tone: '' },
-          { label: '可用余额', value: fmtCurrency(totals.available_balance), tone: '' },
-          { label: '未实现盈亏', value: fmtCurrency(totals.unrealized_pnl), tone: numberTone(totals.unrealized_pnl) },
-          { label: '分发收益', value: fmtCurrency(distributionAmount), tone: numberTone(distributionAmount) },
-          { label: '7日年化', value: fmtPercent(totals.distribution_apy_7d), tone: numberTone(totals.distribution_apy_7d) },
+          { label: t('summary.equity'), value: fmtCurrency(totals.equity), tone: '' },
+          { label: t('summary.margin'), value: fmtCurrency(totals.margin), tone: '' },
+          { label: t('summary.availableBalance'), value: fmtCurrency(totals.available_balance), tone: '' },
+          { label: t('summary.unrealizedPnl'), value: fmtCurrency(totals.unrealized_pnl), tone: numberTone(totals.unrealized_pnl) },
+          { label: t('summary.distributionIncome'), value: fmtCurrency(distributionAmount), tone: numberTone(distributionAmount) },
+          { label: t('summary.apy7d'), value: fmtPercent(totals.distribution_apy_7d), tone: numberTone(totals.distribution_apy_7d) },
         ].map(({ label, value, tone }) => `
           <div class="metric metric-card"><div class="label metric-label">${label}</div><div class="value metric-value ${tone}">${value}</div></div>
         `).join('')}
       </div>
-      <div class="section"><h4>持仓</h4>${renderRows(
-        ['交易对', '方向', '数量', '开仓价', '标记价', '爆仓价', '未实现盈亏', '名义价值', '杠杆'],
+      <div class="section"><h4>${escapeHtml(t('account.positions'))}</h4>${renderRows(
+        tArray('account.positionHeaders'),
         account.positions || [],
         (row) => `
           <tr>
@@ -1690,8 +1759,8 @@ function renderAccount(account) {
           </tr>
         `,
       )}</div>
-      <div class="section"><h4>资产</h4>${renderRows(
-        ['资产', '钱包余额', '现货余额', '可用余额', '保证金余额', '全仓未实现盈亏', '可提数量'],
+      <div class="section"><h4>${escapeHtml(t('account.assets'))}</h4>${renderRows(
+        tArray('account.assetHeaders'),
         account.assets || [],
         (row) => `
           <tr>
@@ -1709,7 +1778,7 @@ function renderGroupStatusBadges(summary = {}) {
   const badges = [];
   const pillBase = 'badge badge-status-reference status-pill-reference status-pill-scaled status-pill-scale-130 group-header-pill group-status-pill';
   if (successCount > 0) badges.push(`<div class="${pillBase} status-ok">${fmtCount(successCount)} ${escapeHtml(groupTextMap.healthy)}</div>`);
-  if (errorCount > 0) badges.push(`<div class="${pillBase} status-error">${fmtCount(errorCount)} 异常</div>`);
+  if (errorCount > 0) badges.push(`<div class="${pillBase} status-error">${fmtCount(errorCount)} ${escapeHtml(t('accountStatus.error'))}</div>`);
   if (!badges.length) badges.push(`<div class="${pillBase} status-disabled">${fmtCount(summary.account_count || 0)} ${escapeHtml(groupTextMap.accounts)}</div>`);
   return badges.join('');
 }
@@ -1755,7 +1824,7 @@ function renderAccountListContent(group) {
         `;
       }).join('')}
     </div>
-    <div class="account-single-view">${activeAccount ? renderAccount(activeAccount) : '<div class="empty">暂无子账号</div>'}</div>
+    <div class="account-single-view">${activeAccount ? renderAccount(activeAccount) : `<div class="empty">${escapeHtml(t('empty.subAccounts'))}</div>`}</div>
   `;
 }
 
@@ -1782,12 +1851,12 @@ function renderGroup(group) {
       </div>
       <div class="group-summary">
         ${[
-          { label: '权益', value: fmtCurrency(summary.equity), tone: '' },
-          { label: '保证金', value: fmtCurrency(summary.margin), tone: '' },
-          { label: '可用余额', value: fmtCurrency(summary.available_balance), tone: '' },
-          { label: '未实现盈亏', value: fmtCurrency(summary.unrealized_pnl), tone: numberTone(summary.unrealized_pnl) },
-          { label: '分发收益', value: fmtCurrency(distributionAmount), tone: numberTone(distributionAmount) },
-          { label: '7日年化', value: fmtPercent(summary.distribution_apy_7d), tone: numberTone(summary.distribution_apy_7d) },
+          { label: t('summary.equity'), value: fmtCurrency(summary.equity), tone: '' },
+          { label: t('summary.margin'), value: fmtCurrency(summary.margin), tone: '' },
+          { label: t('summary.availableBalance'), value: fmtCurrency(summary.available_balance), tone: '' },
+          { label: t('summary.unrealizedPnl'), value: fmtCurrency(summary.unrealized_pnl), tone: numberTone(summary.unrealized_pnl) },
+          { label: t('summary.distributionIncome'), value: fmtCurrency(distributionAmount), tone: numberTone(distributionAmount) },
+          { label: t('summary.apy7d'), value: fmtPercent(summary.distribution_apy_7d), tone: numberTone(summary.distribution_apy_7d) },
         ].map(({ label, value, tone }) => `
           <div class="metric metric-card"><div class="label metric-label">${label}</div><div class="value metric-value ${tone}">${value}</div></div>
         `).join('')}
@@ -1821,7 +1890,7 @@ function groupRenderSignature(group) {
 }
 
 function renderEmptyGroups() {
-  groupsContainer.innerHTML = '<section class="group"><div class="group-head"><h2>暂无分组</h2></div></section>';
+  groupsContainer.innerHTML = `<section class="group"><div class="group-head"><h2>${escapeHtml(t('empty.groups'))}</h2></div></section>`;
   groupsContainer.dataset.empty = 'true';
 }
 
@@ -1964,7 +2033,7 @@ function handleAccountSwitch(mainAccountId, accountId) {
   });
 
   const activeAccount = resolveSelectedAccount(group);
-  accountSingleView.innerHTML = activeAccount ? renderAccount(activeAccount) : '<div class="empty">暂无子账号</div>';
+  accountSingleView.innerHTML = activeAccount ? renderAccount(activeAccount) : `<div class="empty">${escapeHtml(t('empty.subAccounts'))}</div>`;
   renderedGroupSignatures[mainAccountId] = groupRenderSignature(group);
 }
 
@@ -1978,7 +2047,7 @@ function render(payload) {
   connectionBadge.className = `badge badge-status-reference status-pill-reference status-pill-scaled status-pill-scale-130 ${statusClass(monitorStatus)}`;
   connectionBadge.dataset.monitorStatus = monitorStatus;
   messageText.textContent = textMessage(payload.message);
-  updatedAt.textContent = `更新时间：${fmtTime(payload.updated_at)}`;
+  updatedAt.textContent = t('toolbar.updatedAt', { time: fmtTime(payload.updated_at) });
 
   syncMonitorToggle(payload);
   renderToolbarStats(payload.summary || {});
@@ -2073,20 +2142,20 @@ function payloadContainsMonitorSnapshot(payload = {}) {
 function describeRefreshResult(refreshResult, elapsedSeconds, { snapshotApplied = true } = {}) {
   if (!refreshResult) {
     return snapshotApplied
-      ? `刷新完成，耗时 ${elapsedSeconds} 秒`
-      : `刷新请求已发送，耗时 ${elapsedSeconds} 秒，当前数据保持不变，等待新数据返回后自动更新`;
+      ? t('refresh.completed', { seconds: elapsedSeconds })
+      : t('refresh.requestSent', { seconds: elapsedSeconds });
   }
   if (refreshResult.success) {
     const fallbackSections = Array.isArray(refreshResult.fallback_sections) ? refreshResult.fallback_sections : [];
     if (!snapshotApplied) {
-      return `刷新请求已发送，耗时 ${elapsedSeconds} 秒，当前数据保持不变，等待新数据返回后自动更新`;
+      return t('refresh.requestSent', { seconds: elapsedSeconds });
     }
     return fallbackSections.length > 0
-      ? `刷新成功，耗时 ${elapsedSeconds} 秒，部分数据沿用了上一轮成功结果`
-      : `刷新成功，耗时 ${elapsedSeconds} 秒，数据已更新`;
+      ? t('refresh.successWithFallback', { seconds: elapsedSeconds })
+      : t('refresh.success', { seconds: elapsedSeconds });
   }
-  if (refreshResult.timeout) return refreshResult.message || '刷新超时，已保留当前数据';
-  return refreshResult.message || '刷新失败，已保留当前数据';
+  if (refreshResult.timeout) return refreshResult.message || t('refresh.timeout');
+  return refreshResult.message || t('refresh.failed');
 }
 async function setMonitorEnabled(enabled) {
   toggleBusy = true;
@@ -2102,7 +2171,7 @@ async function setMonitorEnabled(enabled) {
     render(payload);
   } catch (error) {
     monitorToggle.checked = !enabled;
-    messageText.textContent = `监控状态更新失败：${error}`;
+    messageText.textContent = t('refresh.stateFailed', { error });
   } finally {
     toggleBusy = false;
     applyActionButtonState();
@@ -2111,13 +2180,13 @@ async function setMonitorEnabled(enabled) {
 
 async function refreshNow() {
   if (refreshBusy) {
-    messageText.textContent = '上一轮刷新仍在进行中，当前数据保持不变';
+    messageText.textContent = t('refresh.busy');
     return;
   }
   refreshBusy = true;
   applyActionButtonState();
   const refreshStartedAt = Date.now();
-  messageText.textContent = '正在刷新，当前数据保持不变，等待新数据返回后自动更新';
+  messageText.textContent = t('refresh.inProgress');
   try {
     const response = await apiFetch('/api/monitor/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
     const payload = await response.json();
@@ -2129,7 +2198,7 @@ async function refreshNow() {
     const elapsedSeconds = Math.max(1, Math.round((Date.now() - refreshStartedAt) / 1000));
     messageText.textContent = describeRefreshResult(payload.refresh_result, elapsedSeconds, { snapshotApplied });
   } catch (error) {
-    messageText.textContent = `立即刷新失败：${error}`;
+    messageText.textContent = t('refresh.nowFailed', { error });
   } finally {
     refreshBusy = false;
     applyActionButtonState();
@@ -2143,14 +2212,14 @@ function describeImportResult(payload = {}) {
   const settingsOnly = result.mode === 'settings_only';
   const updatedSettingsCount = Array.isArray(result.updated_settings_keys) ? result.updated_settings_keys.length : 0;
   const updatedSettings = !settingsOnly && Array.isArray(result.updated_settings_keys) && result.updated_settings_keys.length > 0
-    ? `；已更新 ${fmtCount(result.updated_settings_keys.length)} 项敏感配置`
+    ? t('import.sensitiveSettingsSuffix', { count: fmtCount(result.updated_settings_keys.length) })
     : '';
   const securityNotice = payload.security_notice ? `；${payload.security_notice}` : '';
   const baseMessage = settingsOnly
-    ? `Excel 导入成功，已更新 ${fmtCount(updatedSettingsCount)} 项敏感配置`
+    ? t('import.successWithSettings', { count: fmtCount(updatedSettingsCount) })
     : payload.refresh_result?.success === false
-      ? `Excel 导入成功，已覆盖 ${groupCount} 个分组 / ${accountCount} 个账户，但刷新失败：${payload.refresh_result.message || '-'}`
-      : `Excel 导入成功，已覆盖 ${groupCount} 个分组 / ${accountCount} 个账户`;
+      ? t('import.successRefreshFailed', { groupCount, accountCount, message: payload.refresh_result.message || '-' })
+      : t('import.success', { groupCount, accountCount });
   return `${baseMessage}${updatedSettings}${securityNotice}`;
 }
 
@@ -2162,7 +2231,7 @@ function parseDownloadFilename(contentDisposition) {
 
 async function downloadTemplate() {
   if (importBusy || refreshBusy || toggleBusy) return;
-  messageText.textContent = '正在下载 Excel 模板';
+  messageText.textContent = t('import.downloadingTemplate');
   try {
     const response = await apiFetch('/api/config/import/excel-template', { method: 'GET', cache: 'no-store' });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -2176,9 +2245,9 @@ async function downloadTemplate() {
     anchor.click();
     anchor.remove();
     window.URL.revokeObjectURL(url);
-    messageText.textContent = 'Excel 模板已开始下载';
+    messageText.textContent = t('import.templateStarted');
   } catch (error) {
-    messageText.textContent = `模板下载失败：${error}`;
+    messageText.textContent = t('import.templateFailed', { error });
   }
 }
 
@@ -2186,7 +2255,7 @@ async function uploadExcel(file) {
   if (!file || importBusy) return;
   importBusy = true;
   applyActionButtonState();
-  messageText.textContent = '正在导入 Excel 配置，现有数据保持不变';
+  messageText.textContent = t('import.importingConfig');
   try {
     const formData = new FormData();
     formData.append('file', file);
@@ -2196,7 +2265,7 @@ async function uploadExcel(file) {
     render(payload);
     messageText.textContent = describeImportResult(payload);
   } catch (error) {
-    messageText.textContent = `Excel 导入失败：${error}`;
+    messageText.textContent = t('import.failed', { error });
   } finally {
     importBusy = false;
     importInput.value = '';
@@ -2212,7 +2281,7 @@ async function bootstrap() {
     if (!response.ok) throw new Error(payload.detail || `HTTP ${response.status}`);
     render(payload);
   } catch (error) {
-    messageText.textContent = `初始化失败：${error}`;
+    messageText.textContent = t('import.initFailed', { error });
     applyActionButtonState();
   }
 
@@ -2235,7 +2304,7 @@ async function bootstrap() {
         throw new Error(`HTTP ${response.status}`);
       }
     } catch (error) {
-      messageText.textContent = `退出登录失败：${error}`;
+      messageText.textContent = t('auth.logoutFailed', { error });
       return;
     }
     window.location.replace('/login');
@@ -2262,7 +2331,7 @@ async function bootstrap() {
     fundingSelectedGroupId = fundingGroupSelect.value;
     fundingSelectedAsset = '';
     resetFundingSyncAmountState();
-    appendFundingLog(`已切换分组：${fundingGroupSelect.selectedOptions[0]?.textContent || fundingSelectedGroupId || '-'}`, 'info');
+    appendFundingLog(t('funding.switchedGroup', { group: fundingGroupSelect.selectedOptions[0]?.textContent || fundingSelectedGroupId || '-' }), 'info');
     loadFundingOverview(fundingSelectedGroupId, { resetState: true });
   });
   fundingModeDistribute.addEventListener('click', () => {
@@ -2272,7 +2341,7 @@ async function bootstrap() {
     fundingDirection = 'distribute';
     resetFundingSelectionState();
     resetFundingSyncAmountState();
-    appendFundingLog('已切换到主账号分发模式。', 'info');
+    appendFundingLog(t('funding.switchedDistribute'), 'info');
     renderFundingModal();
   });
   fundingModeCollect.addEventListener('click', () => {
@@ -2282,14 +2351,14 @@ async function bootstrap() {
     fundingDirection = 'collect';
     resetFundingSelectionState();
     resetFundingSyncAmountState();
-    appendFundingLog('已切换到子账号归集模式。', 'info');
+    appendFundingLog(t('funding.switchedCollect'), 'info');
     renderFundingModal();
   });
   fundingAssetSelect.addEventListener('change', () => {
     fundingSelectedAsset = fundingAssetSelect.value;
     resetFundingSelectionState();
     resetFundingSyncAmountState();
-    appendFundingLog(`已切换代币：${fundingSelectedAsset || '-'}`, 'info');
+    appendFundingLog(t('funding.switchedAsset', { asset: fundingSelectedAsset || '-' }), 'info');
     renderFundingModal();
   });
   fundingSyncAmountCheckbox.addEventListener('change', () => {
@@ -2482,6 +2551,7 @@ window.__monitorV2 = {
   loadFundingAudit,
   loadFundingAuditDetail,
   uploadExcel,
+  getUiText: t,
   setFundingAuditFilter: (value) => {
     fundingAuditFilter = String(value || '');
     renderFundingLogPanel();

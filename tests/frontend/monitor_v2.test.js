@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const projectRoot = resolve(fileURLToPath(new URL('.', import.meta.url)), '..', '..');
 const htmlPath = resolve(projectRoot, 'monitor_app', 'static', 'monitor_v2.html');
+const i18nPath = resolve(projectRoot, 'monitor_app', 'static', 'monitor_v2.i18n.js');
 const scriptPath = resolve(projectRoot, 'monitor_app', 'static', 'monitor_v2.js');
 
 function baseAccount(accountId = 'group_a.sub1', childName = 'Sub 1') {
@@ -148,6 +149,7 @@ function createApp() {
     rafQueue[id - 1] = null;
   };
 
+  window.eval(readFileSync(i18nPath, 'utf8'));
   window.eval(readFileSync(scriptPath, 'utf8'));
 
   return {
@@ -192,6 +194,61 @@ describe('monitor_v2.js', () => {
     expect(app.document.querySelectorAll('#summaryCards .summary-card')).toHaveLength(6);
     expect(app.document.querySelector('#profitCards')?.className).toContain('profit-strip');
     expect(app.document.querySelectorAll('#profitCards .profit-card')).toHaveLength(1);
+  });
+
+  it('keeps monitor page styles in the external stylesheet', () => {
+    const app = createApp();
+    apps.push(app);
+
+    expect(app.document.querySelector('style')).toBeNull();
+    expect(app.document.querySelector('link[href^="/static/monitor_v2.css"]')).not.toBeNull();
+  });
+
+  it('renders static monitor copy from the UI language pack', () => {
+    const app = createApp();
+    apps.push(app);
+
+    expect(app.document.title).toBe('币安账户监控台');
+    expect(app.document.querySelector('h1')?.textContent).toBe('币安账户监控台');
+    expect(app.document.getElementById('fundingModalTitle')?.textContent).toBe('资金归集与分发');
+    expect(app.document.querySelector('[data-i18n="funding.table.availableStatus"]')?.textContent).toBe('可用状态');
+    expect(app.document.getElementById('fundingModalClose')?.getAttribute('aria-label')).toBe('关闭');
+    expect(app.api.getUiText('summary.equity')).toBe('权益');
+  });
+
+  it('keeps displayed Chinese copy out of the monitor template and app script', () => {
+    const hardcodedChinese = /\p{Script=Han}/u;
+
+    expect(readFileSync(htmlPath, 'utf8')).not.toMatch(hardcodedChinese);
+    expect(readFileSync(scriptPath, 'utf8')).not.toMatch(hardcodedChinese);
+    expect(readFileSync(i18nPath, 'utf8')).toMatch(hardcodedChinese);
+  });
+
+  it('renders child account status only in the subtitle, without a duplicate header pill', () => {
+    const app = createApp();
+    apps.push(app);
+    app.api.resetTestState();
+
+    const wrapper = app.document.createElement('div');
+    wrapper.innerHTML = app.api.renderAccount(baseAccount());
+    const account = wrapper.querySelector('.account');
+
+    expect(account?.querySelector('.account-subtitle-status')?.textContent).toContain('正常');
+    expect(account?.querySelectorAll('.account-head-actions .badge.account-header-pill')).toHaveLength(0);
+    expect(account?.querySelector('.account-head-actions .uni-mmr-indicator')).not.toBeNull();
+  });
+
+  it('uses explicit column definitions for the funding transfer table', () => {
+    const app = createApp();
+    apps.push(app);
+
+    const table = app.document.querySelector('.funding-table');
+    const columns = table?.querySelectorAll('colgroup col') || [];
+
+    expect(columns).toHaveLength(6);
+    expect(columns[0].className).toContain('funding-col-select');
+    expect(columns[4].className).toContain('funding-col-amount');
+    expect(columns[5].className).toContain('funding-col-status');
   });
 
   it('formats top-level monetary cards and profit strip amounts with a leading dollar sign while keeping rates as percentages', () => {
@@ -611,7 +668,7 @@ describe('monitor_v2.js', () => {
     expect(badge.className).toContain('uni-mmr-bad');
   });
 
-  it('renders the account subtitle as a larger inline id and colored status text while keeping the header status pill styled consistently', () => {
+  it('renders the account subtitle as a larger inline id and colored status text while keeping only the UniMMR header pill', () => {
     const app = createApp();
     apps.push(app);
     app.api.resetTestState();
@@ -627,8 +684,8 @@ describe('monitor_v2.js', () => {
     expect(subtitle?.querySelector('.account-subtitle-divider')).not.toBeNull();
     expect(subtitle?.querySelector('.account-subtitle-status')?.textContent).toContain('异常');
     expect(subtitle?.querySelector('.account-subtitle-status')?.className).toContain('account-subtitle-status-error');
-    expect(app.document.querySelector('.account-head-actions .badge')?.className).toContain('account-header-pill');
-    expect(app.document.querySelector('.account-head-actions .badge')?.className).toContain('status-pill-reference');
+    expect(app.document.querySelector('.account-head-actions .badge')).toBeNull();
+    expect(app.document.querySelector('.account-head-actions .uni-mmr-indicator')?.className).toContain('account-header-pill');
   });
 
   it('falls back to the monitor status text in the account subtitle when account_status is missing', () => {
@@ -853,7 +910,7 @@ describe('monitor_v2.js', () => {
     app.api.renderFundingModal();
 
     const text = app.document.body.textContent;
-    expect(text).toContain('1313**77');
+    expect(text).toContain('131***77');
     expect(text).toContain('2234***89');
     expect(text).not.toContain('13133777');
     expect(text).not.toContain('223456789');
